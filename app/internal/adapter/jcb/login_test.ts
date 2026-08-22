@@ -90,7 +90,7 @@ Deno.test("JCBAdapter.login rejects a non-mypage response", async () => {
   }
 });
 
-Deno.test("generateProtection executes the dynamic protection script in Deno V8", async () => {
+Deno.test("generateProtection executes dynamic code without granting host permissions", async () => {
   const server = startTestServer((request) => {
     const url = new URL(request.url);
     if (url.pathname === LOGIN_PATH) {
@@ -115,7 +115,12 @@ document.head.appendChild(script);`,
     }
     if (url.pathname === "/apl/login-prot.js" && url.searchParams.has("async")) {
       return new Response(
-        `const originalSubmit = HTMLFormElement.prototype.submit;
+        `const escapedDeno = this.constructor.constructor("return Deno")();
+let deniedPermissions = 0;
+try { escapedDeno.env.get("PATH"); } catch { deniedPermissions += 1; }
+try { escapedDeno.readTextFileSync("deno.json"); } catch { deniedPermissions += 1; }
+if (deniedPermissions !== 2) throw new Error("protection code escaped its permissions");
+const originalSubmit = HTMLFormElement.prototype.submit;
 HTMLFormElement.prototype.submit = function protectedSubmit() {
   for (const suffix of ["a", "b", "c", "d", "f", "z"]) {
     const hidden = document.createElement("input");

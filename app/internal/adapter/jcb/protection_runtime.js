@@ -9,9 +9,19 @@ export async function executeProtection({
   asyncURL,
   initSource,
   asyncSource,
-  cookies,
+  cookieHeader,
 }) {
+  loginURL = new URL(loginURL);
+  initURL = new URL(initURL);
+  asyncURL = new URL(asyncURL);
   const origin = loginURL.origin;
+  const cookieUpdates = [];
+  const documentCookies = new Map();
+  for (const part of String(cookieHeader).split(";")) {
+    const separator = part.indexOf("=");
+    if (separator <= 0) continue;
+    documentCookies.set(part.slice(0, separator).trim(), part.slice(separator + 1).trim());
+  }
   const nonce = initSource.match(
     /currentScript&&document\.currentScript\.nonce\|\|"([^"]+)"/,
   )?.[1] || "";
@@ -420,10 +430,16 @@ export async function executeProtection({
       form.ownerDocument = this;
     }
     get cookie() {
-      return cookies.header(loginURL, false);
+      return [...documentCookies].map(([name, value]) => `${name}=${value}`).join("; ");
     }
     set cookie(value) {
-      cookies.set(value, loginURL, false);
+      const serialized = String(value);
+      cookieUpdates.push(serialized);
+      const pair = serialized.split(";", 1)[0] || "";
+      const separator = pair.indexOf("=");
+      if (separator > 0) {
+        documentCookies.set(pair.slice(0, separator).trim(), pair.slice(separator + 1).trim());
+      }
     }
     createElement(tagName) {
       let element;
@@ -692,7 +708,7 @@ export async function executeProtection({
         body.append(control.name, String(control.value));
       }
     }
-    return { action: form.action, body: body.toString() };
+    return { action: form.action, body: body.toString(), cookieUpdates };
   } finally {
     for (const handle of pendingTimeouts) clearTimeout(handle);
     for (const handle of pendingIntervals) clearInterval(handle);

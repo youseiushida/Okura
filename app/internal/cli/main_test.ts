@@ -1,6 +1,11 @@
 import { assertEquals, assertRejects, assertStringIncludes, assertThrows } from "@std/assert/";
 import type { CashOut } from "../model/transaction.ts";
-import { formatCashOuts, parseJCBFetchArguments, runCLI } from "./main.ts";
+import {
+  formatCashOuts,
+  parseAmazonFetchArguments,
+  parseJCBFetchArguments,
+  runCLI,
+} from "./main.ts";
 
 Deno.test("parseJCBFetchArguments treats CLI dates as an inclusive JST range", () => {
   const parsed = parseJCBFetchArguments([
@@ -75,6 +80,43 @@ Deno.test("runCLI does not fetch when credentials are missing", async () => {
   );
 });
 
+Deno.test("parseAmazonFetchArguments uses the amazon wallet by default", () => {
+  const parsed = parseAmazonFetchArguments(["--from", "2026-08-01", "--to", "2026-08-23"]);
+  assertEquals(parsed.walletID, "amazon");
+  assertEquals(parsed.period.from.toISOString(), "2026-07-31T15:00:00.000Z");
+  assertEquals(parsed.period.to.toISOString(), "2026-08-23T15:00:00.000Z");
+});
+
+Deno.test("runCLI obtains Amazon credentials and verification code", async () => {
+  const writes: string[] = [];
+  let credentials = { email: "", password: "" };
+  let verificationCode = "";
+  const result = await runCLI(
+    ["amazon", "fetch", "--from", "2026-08-01", "--to", "2026-08-23"],
+    {
+      getEnv: () => undefined,
+      askText: (message) =>
+        Promise.resolve(message.includes("verification") ? "123456" : "user\\@example.com"),
+      askSecret: () => Promise.resolve("amazon-password"),
+      write: (message) => writes.push(message),
+      createJCB: () => {
+        throw new Error("must not create JCB adapter");
+      },
+      createAmazon: () => ({
+        async login(value, options) {
+          credentials = value;
+          verificationCode = await options!.askVerificationCode!();
+        },
+        fetchCashOuts: () => Promise.resolve([amazonCashOut()]),
+      }),
+    },
+  );
+  assertEquals(result, 0);
+  assertEquals(credentials, { email: "user@example.com", password: "amazon-password" });
+  assertEquals(verificationCode, "123456");
+  assertStringIncludes(writes.join("\n"), "2026-08-20\t1280円\tAmazon.co.jp");
+});
+
 Deno.test("formatCashOuts emits machine-readable JSON", () => {
   const output = formatCashOuts(
     [cashOut()],
@@ -100,5 +142,15 @@ function cashOut(): CashOut {
     occurredAt: new Date("2026-06-17T15:00:00.000Z"),
     from: "wallet-jcb",
     to: { name: "ＣＬＯＵＤＦＬＡＲＥ", metadata: { source: "jcb" } },
+  };
+}
+
+function amazonCashOut(): CashOut {
+  return {
+    id: "amazon:123-4567890-1234567",
+    amount: 1280,
+    occurredAt: new Date("2026-08-19T15:00:00.000Z"),
+    from: "amazon",
+    to: { name: "Amazon.co.jp", metadata: { source: "amazon" } },
   };
 }

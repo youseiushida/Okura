@@ -1,5 +1,10 @@
 import { JCBAdapter } from "../adapter/jcb/mod.ts";
 import type { Credentials } from "../adapter/jcb/mod.ts";
+import { AmazonAdapter } from "../adapter/amazon/mod.ts";
+import type {
+  Credentials as AmazonCredentials,
+  LoginOptions as AmazonLoginOptions,
+} from "../adapter/amazon/mod.ts";
 import type { CashOut } from "../model/transaction.ts";
 import type { Period } from "../port/source.ts";
 
@@ -11,12 +16,18 @@ interface JCBClient {
   fetchCashOuts(period: Period): Promise<CashOut[]>;
 }
 
+interface AmazonClient {
+  login(credentials: AmazonCredentials, options?: AmazonLoginOptions): Promise<void>;
+  fetchCashOuts(period: Period): Promise<CashOut[]>;
+}
+
 export interface CLIEnvironment {
   getEnv(name: string): string | undefined;
   askText(message: string): Promise<string>;
   askSecret(message: string): Promise<string>;
   write(message: string): void;
   createJCB(walletID: string): JCBClient;
+  createAmazon?(walletID: string): AmazonClient;
 }
 
 export interface JCBFetchArguments {
@@ -33,6 +44,7 @@ const defaultEnvironment: CLIEnvironment = {
   askSecret: readHiddenLine,
   write: (message) => console.log(message),
   createJCB: (walletID) => new JCBAdapter({ walletID }),
+  createAmazon: (walletID) => new AmazonAdapter({ walletID }),
 };
 
 export async function runCLI(
@@ -44,11 +56,16 @@ export async function runCLI(
     environment.write(usage());
     return 0;
   }
-  if (args[0] !== "jcb" || args[1] !== "fetch") {
+  if (args[1] !== "fetch" || (args[0] !== "jcb" && args[0] !== "amazon")) {
     throw new TypeError(`unknown command\n\n${usage()}`);
   }
 
-  const options = parseJCBFetchArguments(args.slice(2));
+  if (args[0] === "amazon") return await runAmazonFetch(args.slice(2), environment);
+  return await runJCBFetch(args.slice(2), environment);
+}
+
+async function runJCBFetch(args: string[], environment: CLIEnvironment): Promise<number> {
+  const options = parseJCBFetchArguments(args);
   const userID = environment.getEnv("JCB_USER_ID")?.trim() ||
     (await environment.askText("MyJCB user ID:")).trim();
   const password = environment.getEnv("JCB_PASSWORD") ||
@@ -63,8 +80,38 @@ export async function runCLI(
   return 0;
 }
 
+async function runAmazonFetch(args: string[], environment: CLIEnvironment): Promise<number> {
+  const options = parseAmazonFetchArguments(args);
+  const email = normalizeAmazonEmail(
+    environment.getEnv("AMAZON_EMAIL")?.trim() ||
+      (await environment.askText("Amazon email: ")).trim(),
+  );
+  const password = environment.getEnv("AMAZON_PASSWORD") ||
+    await environment.askSecret("Amazon password: ");
+  if (email === "") throw new TypeError("Amazon email is required");
+  if (password === "") throw new TypeError("Amazon password is required");
+
+  const adapter = environment.createAmazon?.(options.walletID) ??
+    new AmazonAdapter({ walletID: options.walletID });
+  await adapter.login({ email, password }, {
+    askVerificationCode: async () =>
+      await environment.askText("Amazon verification code (if requested): "),
+  });
+  const cashOuts = await adapter.fetchCashOuts(options.period);
+  environment.write(formatCashOuts(cashOuts, options));
+  return 0;
+}
+
 export function parseJCBFetchArguments(args: string[]): JCBFetchArguments {
-  let walletID = "jcb";
+  return parseFetchArguments(args, "jcb");
+}
+
+export function parseAmazonFetchArguments(args: string[]): JCBFetchArguments {
+  return parseFetchArguments(args, "amazon");
+}
+
+function parseFetchArguments(args: string[], defaultWalletID: string): JCBFetchArguments {
+  let walletID = defaultWalletID;
   let fromLabel = "";
   let toLabel = "";
   let format: JCBFetchArguments["format"] = "table";
@@ -163,9 +210,13 @@ function formatJSTDate(value: Date): string {
   return new Date(value.getTime() + JST_OFFSET_MS).toISOString().slice(0, 10);
 }
 
+function normalizeAmazonEmail(value: string): string {
+  return value.replaceAll("\\@", "@").replaceAll("＠", "@");
+}
+
 async function readHiddenLine(message: string): Promise<string> {
   if (!Deno.stdin.isTerminal()) {
-    throw new Error("JCB_PASSWORD is not set and stdin is not interactive");
+    throw new Error("password is not set and stdin is not interactive");
   }
   await Deno.stdout.write(new TextEncoder().encode(message));
   const bytes: number[] = [];
@@ -197,16 +248,19 @@ function usage(): string {
 
 Usage:
   okura.exe jcb fetch --from YYYY-MM-DD --to YYYY-MM-DD [options]
+  okura.exe amazon fetch --from YYYY-MM-DD --to YYYY-MM-DD [options]
 
 Development:
   deno task jcb -- --from YYYY-MM-DD --to YYYY-MM-DD [options]
+  deno task amazon -- --from YYYY-MM-DD --to YYYY-MM-DD [options]
 
 Options:
-  --wallet-id ID       Wallet ID (default: jcb)
+  --wallet-id ID       Wallet ID (default: adapter name)
   --from DATE          First date to fetch (inclusive)
   --to DATE            Last date to fetch (inclusive)
   --format table|json  Output format (default: table)
 
 Credentials:
-  Enter interactively, or set JCB_USER_ID and JCB_PASSWORD.`;
+  Enter interactively, or set JCB_USER_ID/JCB_PASSWORD or
+  AMAZON_EMAIL/AMAZON_PASSWORD.`;
 }

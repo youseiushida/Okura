@@ -1,4 +1,5 @@
 import type { WalletID } from "../../model/account.ts";
+import { readBytesLimited } from "../../http/body.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { JCBError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
@@ -147,12 +148,11 @@ export function isLoginResponse(response: Response): boolean {
 }
 
 async function decodeLimitedResponse(response: Response, limit: number): Promise<string> {
-  const declaredLength = Number(response.headers.get("Content-Length"));
-  if (Number.isFinite(declaredLength) && declaredLength > limit) {
-    throw new JCBError(`response exceeds ${limit} bytes`);
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > limit) throw new JCBError(`response exceeds ${limit} bytes`);
+  const bytes = await readBytesLimited(
+    response,
+    limit,
+    (value) => new JCBError(`response exceeds ${value} bytes`),
+  );
   const contentType = response.headers.get("Content-Type") ?? "";
   const charset = contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1] ?? "utf-8";
   try {

@@ -1,7 +1,11 @@
 import type { JCBAdapter } from "./adapter.ts";
+import {
+  discardLimited as discardResponseLimited,
+  readTextLimited as readResponseTextLimited,
+} from "../../http/body.ts";
 import { MAX_RESPONSE_BYTES } from "./adapter.ts";
 import { AuthenticationFailedError, JCBError } from "./errors.ts";
-import { executeProtection as executeProtectionRuntime } from "./protection_runtime.js";
+import { executeProtectionIsolated } from "./protection_worker_client.ts";
 import type { HttpSession } from "./session.ts";
 
 export const LOGIN_PATH = "/Login";
@@ -47,22 +51,19 @@ interface RuntimeInput {
 
 interface RuntimeRequest {
   input: RuntimeInput;
-  loginURL: URL;
-  initURL: URL;
-  asyncURL: URL;
+  loginURL: string;
+  initURL: string;
+  asyncURL: string;
   initSource: string;
   asyncSource: string;
-  cookies: HttpSession["cookies"];
+  cookieHeader: string;
 }
 
 interface RuntimeResult {
   action: string;
   body: string;
+  cookieUpdates: string[];
 }
-
-const executeProtection = executeProtectionRuntime as (
-  request: RuntimeRequest,
-) => Promise<RuntimeResult>;
 
 export async function createAuthenticated(
   config: ConstructorParameters<typeof JCBAdapter>[0],
@@ -161,15 +162,17 @@ export async function generateProtection(context: ProtectionContext): Promise<Pr
   if (!asyncResponse.ok) throw new JCBError(`GET ${asyncURL}: HTTP ${asyncResponse.status}`);
   const asyncSource = await readTextLimited(asyncResponse, MAX_RESPONSE_BYTES);
 
-  const result = await executeProtection({
+  const request: RuntimeRequest = {
     input: { userID: credentials.userID, password: credentials.password, userAgent },
-    loginURL,
-    initURL,
-    asyncURL,
+    loginURL: loginURL.href,
+    initURL: initURL.href,
+    asyncURL: asyncURL.href,
     initSource,
     asyncSource,
-    cookies: session.cookies,
-  });
+    cookieHeader: session.cookies.header(loginURL, false),
+  };
+  const result: RuntimeResult = await executeProtectionIsolated(request, signal);
+  for (const cookie of result.cookieUpdates) session.cookies.set(cookie, loginURL, false);
   return { ...result, userAgent };
 }
 
@@ -228,18 +231,19 @@ function protectionHeaders(userAgent: string, referer: string): Headers {
 }
 
 async function readTextLimited(response: Response, limit: number): Promise<string> {
-  const length = Number(response.headers.get("Content-Length"));
-  if (Number.isFinite(length) && length > limit) {
-    throw new JCBError(`response exceeds ${limit} bytes`);
-  }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > limit) throw new JCBError(`response exceeds ${limit} bytes`);
-  return new TextDecoder().decode(bytes);
+  return await readResponseTextLimited(
+    response,
+    limit,
+    (value) => new JCBError(`response exceeds ${value} bytes`),
+  );
 }
 
 async function discardLimited(response: Response, limit: number): Promise<void> {
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.byteLength > limit) throw new JCBError(`response exceeds ${limit} bytes`);
+  await discardResponseLimited(
+    response,
+    limit,
+    (value) => new JCBError(`response exceeds ${value} bytes`),
+  );
 }
 
 function normalizedPath(url: URL): string {
