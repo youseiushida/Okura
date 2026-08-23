@@ -42,16 +42,34 @@ Composition Root ───┴──> Adapters ──────┘
 - サイト固有のURL、HTML、API、認証状態、parserはそのproviderのadapter内。
 - 具体部品の生成とuse caseへの接続はcomposition rootだけ。
 
+## YAGNIと後方互換性
+
+- 現在確認できる要件に必要な最小実装を選び、将来の可能性だけを理由にmigration、
+  互換reader、fallback、dual write、feature flagを追加しない。
+- repository、HEAD、Git履歴に旧実装や旧schemaが存在するだけでは、配布済みの互換対象や
+  migrationの必要性を推定しない。
+- ユーザーが明示的に依頼または承認していないmigration、後方互換処理、既存データ変換の
+  必要性を発見した場合は、コードや実装計画へ組み込まず作業を止めて報告する。
+- 報告では、確認できた事実、影響対象、対応しない場合の結果、追加される複雑性・依存・権限、
+  最小の選択肢を示し、ユーザーの判断を待つ。
+- ユーザーの明示的な承認を得るまでmigrationや互換処理を実装しない。
+- 既存ユーザーまたは保持対象データが存在しないと確認できた場合は旧形式を直接置き換え、
+  旧reader、二重保存先、専用test、不要なdependency・runtime permissionを残さない。
+- `README.md` と公開ドキュメントは、ユーザーから明示的に依頼または承認された場合だけ変更する。
+  コード変更によって記述が古くなる場合は、勝手に更新せず差異を報告する。
+
 ## 安定したディレクトリ境界
 
 ```text
 app/internal/
 ├── model/          金融データとconnection identity
-├── port/           認証、source、session vaultの抽象
-├── application/    認証調停と取得use case
+├── port/           認証、source、session/credential/secret storeの抽象
+├── application/    認証・資格情報調停と取得use case
 ├── adapter/
 │   ├── <provider>/  providerごとに閉じた実装
-│   └── session/     session永続化adapter
+│   ├── credential/  一次認証情報の永続化adapter
+│   ├── keyring/     OS secret store adapter
+│   └── session/     session暗号化・永続化adapter
 ├── cli/            引数、入力、表示、routing
 ├── http/           安全なHTTP sessionとbody制限
 ├── error/          共通エラー補助
@@ -169,6 +187,29 @@ adapter/<provider>/
 session復元、新規login、保存、再認証の順序は `AuthCoordinator` に任せる。provider側やCLIで
 同じ手順を再実装しない。
 
+### CredentialとSessionの永続化
+
+- 一次認証情報は `CredentialVaultPort`、Cookie等は `SessionVaultPort` として分離する。
+- 資格情報の取得順は、関連する環境変数が1つでもあれば環境変数と不足分の対話入力、
+  それ以外はOS credential store、最後に対話入力とする。環境変数と保存済みpasswordを混ぜない。
+- credential schemaが扱える秘密はidentifier/passwordだけとし、OTP、TOTP seed、外部承認、
+  認証link、秘密の質問、CAPTCHA情報を追加しない。
+- credential保存は明示opt-in時かつ新規login成功後だけ行う。login、OTP、通信、WAFの失敗時に
+  保存済みcredentialを自動削除・上書きしない。
+- 保存済みcredentialの再入力案内へ変換するのは、providerが一次identifier/passwordを明示的に
+  拒否したtyped errorだけとする。OTP、WAF、通信、unexpected page、abort理由を包み直さない。
+- 有効なsessionを再利用できた場合はcredential storeや環境変数、promptへ触れない。
+- OS credential storeでは用途ごとにservice名を分け、accountにはconnection IDだけを使う。
+  identifierはmetadataへ露出させずsecret内へ格納する。
+- Windows/macOSはOS keyring、LinuxはSecret Serviceを明示利用する。平文file、環境変数、
+  Linux kernel keyringへ自動fallbackしない。
+- native keyring bindingのimport前に、継承したlibrary path overrideを拒否する。
+- session本体はkeyringへ直接保存せず、keyring内のAES-256 master keyを使ったAES-GCM fileとする。
+  master keyの削除は既存sessionを復号不能にするため、通常のsession削除では行わない。
+- master keyの初期化はOS advisory lockを保持したままkeyringへの保存と再読込を完了し、
+  経過時間だけで使用中lockを削除しない。
+- secret、identifier、暗号鍵、復号済みsnapshotをlogやerror messageへ含めない。
+
 ### HTTPとparser
 
 - requestは原則として共通の `HttpSession` を使い、cookieと安全なredirect処理を再利用する。
@@ -236,6 +277,10 @@ provider追加によってCLIに認証手順、cookie処理、複数sourceの `P
 - foreign provider、別connection、未知schema、malformed payload、許可外cookie domainの拒否。
 - restore後にvalidationを要求すること。
 - OTPまたは外部承認が `AuthInteraction` を通ること。
+- 有効なsessionではcredential store、環境変数、promptへ触れないこと。
+- credential取得優先順位と、login成功後だけのopt-in保存。
+- login失敗、OTP失敗、abort時にcredentialを保存・削除しないこと。
+- credentialとsession snapshotへOTPが含まれないこと。
 - login失敗後にsessionをclearすること。
 - WAFや曖昧な403をexpiredと誤分類しないこと。
 - 動的コードを使う場合、環境変数・filesystem・任意networkへ到達できないこと。
@@ -264,6 +309,12 @@ deno task check
 deno task test
 ```
 
+OS credential storeの検証は通常suiteから分離し、対応OS上で
+`deno task smoke:storage:<os>` を実行する。テスト専用service/accountと一時directoryを使い、
+成功・失敗のどちらでもcredential、master key、fileをcleanupする。
+このentry pointだけを `app/smoke/` に置く。汎用utility、一時debug script、migrationなどを
+`smoke/` へ置かず、それぞれの責務を持つdirectoryへ配置する。
+
 新しいWorker entry pointを追加した場合は `deno.json` の `compile.include` とcompile taskも確認する。
 
 ## 完了条件
@@ -273,9 +324,13 @@ deno task test
 - CLIはuse caseを呼び、取得手順を知らない。
 - modelの意味、日付、金額、stable ID、transfer方針がテストで固定されている。
 - session snapshotにcredentialやOTPが含まれない。
+- credential vaultにOTPや外部承認結果が含まれない。
+- credentialとsessionが平文fileへfallbackしない。
 - parserはサイト変更を空データとして隠さずfail closedする。
 - response、pagination、Workerにresource上限とabort経路がある。
 - fixtureとerror messageに秘密情報や個人情報がない。
+- ユーザーが明示的に承認していないmigration、互換reader、fallback、dual write、
+  旧dependency、追加permissionが含まれていない。
 - format、lint、型検査、全テストが成功する。
 
 provider固有の一時的なDOM selectorやURL一覧はこの文書へ増やさず、adapterのcodeとfixture testへ置く。

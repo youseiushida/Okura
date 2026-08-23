@@ -10,7 +10,6 @@ import type {
 
 const MAX_ENCRYPTED_BYTES = 4 << 20;
 const MAX_PLAINTEXT_BYTES = 2 << 20;
-const ENTROPY_LABEL = "Okura session vault v1";
 
 export interface DataProtector {
   protect(value: Uint8Array, options?: SessionVaultOptions): Promise<Uint8Array>;
@@ -57,10 +56,7 @@ export class FileSessionVault implements SessionVaultPort {
       throw new Error("decrypted session vault entry is too large");
     }
     try {
-      return bindLegacySnapshotToConnection(
-        JSON.parse(new TextDecoder().decode(plaintext)),
-        key,
-      );
+      return JSON.parse(new TextDecoder().decode(plaintext));
     } catch (error) {
       throw new Error("decrypted session vault entry is not valid JSON", { cause: error });
     }
@@ -126,99 +122,6 @@ export class FileSessionVault implements SessionVaultPort {
     );
     const suffix = toHex(new Uint8Array(digest)).slice(0, 32);
     return join(this.#root, `${key.provider}-${suffix}.session`);
-  }
-}
-
-/**
- * ConnectionID導入前のDPAPI snapshotを、読み出した保存キーへ束縛する。
- * 認証成功後の通常の再保存で新形式へ置き換わる。
- */
-export function bindLegacySnapshotToConnection(
-  value: unknown,
-  key: SessionKey,
-): unknown {
-  if (
-    typeof value !== "object" || value === null || Array.isArray(value) ||
-    !("provider" in value) || value.provider !== key.provider ||
-    !("schemaVersion" in value) || value.schemaVersion !== 1 ||
-    ("connectionID" in value && value.connectionID !== undefined)
-  ) return value;
-  return { ...value, connectionID: key.id };
-}
-
-/** Windows CurrentUser DPAPI。平文・暗号文はstdin/stdoutだけで渡す。 */
-export class WindowsDPAPIProtector implements DataProtector {
-  protect(value: Uint8Array, options?: SessionVaultOptions): Promise<Uint8Array> {
-    return runDPAPI("Protect", value, options?.signal);
-  }
-
-  unprotect(value: Uint8Array, options?: SessionVaultOptions): Promise<Uint8Array> {
-    return runDPAPI("Unprotect", value, options?.signal);
-  }
-}
-
-export function createDefaultSessionVault(): SessionVaultPort {
-  if (Deno.build.os !== "windows") {
-    throw new Error("persistent session storage is currently supported only on Windows");
-  }
-  const localAppData = Deno.env.get("LOCALAPPDATA");
-  if (localAppData === undefined || localAppData.trim() === "") {
-    throw new Error("LOCALAPPDATA is unavailable");
-  }
-  return new FileSessionVault(
-    join(localAppData, "Okura", "sessions", "v1"),
-    new WindowsDPAPIProtector(),
-  );
-}
-
-async function runDPAPI(
-  operation: "Protect" | "Unprotect",
-  value: Uint8Array,
-  signal?: AbortSignal,
-): Promise<Uint8Array> {
-  signal?.throwIfAborted();
-  const script = [
-    '[void][Reflection.Assembly]::LoadWithPartialName("System.Security")',
-    "$inputStream=[Console]::OpenStandardInput()",
-    "$memory=New-Object IO.MemoryStream",
-    "$inputStream.CopyTo($memory)",
-    `$entropy=[Text.Encoding]::UTF8.GetBytes("${ENTROPY_LABEL}")`,
-    `$output=[Security.Cryptography.ProtectedData]::${operation}(` +
-    "$memory.ToArray(),$entropy,[Security.Cryptography.DataProtectionScope]::CurrentUser)",
-    "$stdout=[Console]::OpenStandardOutput()",
-    "$stdout.Write($output,0,$output.Length)",
-  ].join("; ");
-  const child = new Deno.Command("powershell.exe", {
-    args: ["-NoProfile", "-NonInteractive", "-Command", script],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-  const abort = () => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Process may already have exited.
-    }
-  };
-  signal?.addEventListener("abort", abort, { once: true });
-  try {
-    const writer = child.stdin.getWriter();
-    await writer.write(value);
-    await writer.close();
-    const output = await child.output();
-    signal?.throwIfAborted();
-    if (!output.success) {
-      const message = new TextDecoder().decode(output.stderr).replace(/\s+/g, " ").trim();
-      throw new Error(
-        `Windows DPAPI ${operation.toLowerCase()} failed${
-          message === "" ? "" : `: ${message.slice(0, 300)}`
-        }`,
-      );
-    }
-    return output.stdout;
-  } finally {
-    signal?.removeEventListener("abort", abort);
   }
 }
 

@@ -2,7 +2,9 @@ import { FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
 import { createAmazonModule } from "../adapter/amazon/module.ts";
 import { createJCBModule } from "../adapter/jcb/module.ts";
 import { createMoneyForwardModule } from "../adapter/moneyforward/module.ts";
-import { createDefaultSessionVault } from "../adapter/session/dpapi_vault.ts";
+import { KeyringCredentialVault } from "../adapter/credential/keyring_vault.ts";
+import { createDefaultSecretStore } from "../adapter/keyring/os_keyring.ts";
+import { createDefaultSessionVault } from "../adapter/session/default_vault.ts";
 import type { CLIEnvironment } from "./runtime.ts";
 
 export const defaultEnvironment: CLIEnvironment = {
@@ -11,12 +13,14 @@ export const defaultEnvironment: CLIEnvironment = {
   askSecret: readHiddenLine,
   write: (message) => console.log(message),
   warn: (message) => console.warn(message),
-  createSessionVault: createDefaultSessionVault,
+  createSessionVault: () => createDefaultSessionVault(createDefaultSecretStore()),
+  createCredentialVault: () => new KeyringCredentialVault(createDefaultSecretStore()),
   createJCBFetch: (connection, walletID) => {
     const module = createJCBModule({ connection, walletID });
     return new FetchCashOuts({
       authentication: module.auth,
-      sessionVault: createDefaultSessionVault(),
+      sessionVault: createDefaultSessionVault(createDefaultSecretStore()),
+      credentialVault: new KeyringCredentialVault(createDefaultSecretStore()),
       cashOuts: module.sources.cashOuts,
     });
   },
@@ -24,7 +28,8 @@ export const defaultEnvironment: CLIEnvironment = {
     const module = createAmazonModule({ connection, walletID });
     return new FetchCashOuts({
       authentication: module.auth,
-      sessionVault: createDefaultSessionVault(),
+      sessionVault: createDefaultSessionVault(createDefaultSecretStore()),
+      credentialVault: new KeyringCredentialVault(createDefaultSecretStore()),
       cashOuts: module.sources.cashOuts,
     });
   },
@@ -32,7 +37,8 @@ export const defaultEnvironment: CLIEnvironment = {
     const module = createMoneyForwardModule({ connection });
     return new FetchFinancialSnapshot({
       authentication: module.auth,
-      sessionVault: createDefaultSessionVault(),
+      sessionVault: createDefaultSessionVault(createDefaultSecretStore()),
+      credentialVault: new KeyringCredentialVault(createDefaultSecretStore()),
       ...module.sources,
     });
   },

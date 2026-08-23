@@ -9,6 +9,7 @@ export interface FetchArguments<Provider extends SupportedProviderID = Supported
   readonly walletID: string;
   readonly connection: ProviderConnection<Provider>;
   readonly reauthenticate: boolean;
+  readonly saveCredentials: boolean;
   readonly period: Period;
   readonly periodLabels: {
     readonly from: string;
@@ -66,12 +67,17 @@ function parseFetchArguments<Provider extends SupportedProviderID>(
   let toLabel = "";
   let format: FetchArguments["format"] = "table";
   let reauthenticate = false;
+  let saveCredentials = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const name = args[index];
     if (name === "--") continue;
     if (name === "--reauth") {
       reauthenticate = true;
+      continue;
+    }
+    if (name === "--save-credentials") {
+      saveCredentials = true;
       continue;
     }
 
@@ -115,6 +121,7 @@ function parseFetchArguments<Provider extends SupportedProviderID>(
     walletID,
     connection: createProviderConnection(provider, profile),
     reauthenticate,
+    saveCredentials,
     periodLabels: { from: fromLabel, to: toLabel },
     period: { from, to: new Date(toInclusive.getTime() + DAY_MS) },
     format,

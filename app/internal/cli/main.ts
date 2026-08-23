@@ -29,7 +29,23 @@ export async function runCLI(
   if (args[1] === "session" && args[2] === "remove") {
     return await removeSession(provider, args.slice(3), environment);
   }
+  if (args[1] === "credentials" && args[2] === "remove") {
+    return await removeCredentials(provider, args.slice(3), environment);
+  }
   throw new TypeError(`unknown command\n\n${usage()}`);
+}
+
+async function removeCredentials(
+  provider: SupportedProviderID,
+  args: string[],
+  environment: CLIEnvironment,
+): Promise<number> {
+  const connection = parseSessionConnection(provider, args);
+  await environment.createCredentialVault().remove(connection);
+  environment.write(
+    `Removed saved credentials for connection ${connection.id}; the saved session was retained.`,
+  );
+  return 0;
 }
 
 async function removeSession(

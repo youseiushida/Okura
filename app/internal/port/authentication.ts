@@ -76,6 +76,17 @@ export interface LoginOptions extends AuthenticationOptions {
   readonly interaction: AuthInteraction;
 }
 
+/** Providerが一次identifier/passwordを明示的に拒否した場合だけ使用する。 */
+export class PrimaryCredentialRejectedError extends Error {
+  readonly provider: ProviderID;
+
+  constructor(provider: ProviderID, message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = new.target.name;
+    this.provider = provider;
+  }
+}
+
 /**
  * providerの認証済みHTTPセッションを管理するPort。
  *

@@ -7,6 +7,7 @@ import type {
 import type { EmailPasswordCredentials } from "../../port/credentials.ts";
 import {
   AuthenticationFailedError,
+  CredentialRejectedError,
   UnexpectedPageError,
   VerificationRequiredError,
 } from "./errors.ts";
@@ -94,12 +95,19 @@ export async function performLogin(
 
   let response = loginResponse;
   let html = await decodeLimitedResponse(response, MAX_LOGIN_RESPONSE_BYTES);
+  let verificationSubmitted = false;
   if (isVerificationPage(response, html)) {
     response = await submitVerification(target, response, html, options);
     html = await decodeLimitedResponse(response, MAX_LOGIN_RESPONSE_BYTES);
+    verificationSubmitted = true;
   }
   if (isAuthenticationPage(response) || isVerificationPage(response, html)) {
-    throw authenticationFailure(response, html, "password or verification", credentials.email);
+    throw authenticationFailure(
+      response,
+      html,
+      verificationSubmitted ? "verification" : "password",
+      credentials.email,
+    );
   }
 
   const historyURL = new URL(ORDER_HISTORY_PATH, target.baseURL);
@@ -321,9 +329,9 @@ function isOrderHistoryPage(html: string): boolean {
 function authenticationFailure(
   response: Response,
   html: string,
-  stage: string,
+  stage: "email" | "password" | "verification",
   email: string,
-): AuthenticationFailedError {
+): Error {
   const path = response.url === "" ? "unknown URL" : new URL(response.url).pathname;
   if (isWAFPage(html)) {
     return new AuthenticationFailedError(
@@ -354,16 +362,27 @@ function authenticationFailure(
         if (element.closest(".aok-hidden, [aria-hidden='true']") !== null) continue;
         const message = sanitizeServerMessage(element.textContent ?? "", email);
         if (message !== "") {
-          return new AuthenticationFailedError(
-            `Amazon rejected the ${stage} step (${path}): ${message}`,
-          );
+          return rejectedStageError(stage, path, message);
         }
       }
     }
   } finally {
     dom.window.close();
   }
-  return new AuthenticationFailedError(`Amazon rejected the ${stage} step (${path})`);
+  return rejectedStageError(stage, path);
+}
+
+function rejectedStageError(
+  stage: "email" | "password" | "verification",
+  path: string,
+  detail?: string,
+): Error {
+  const message = `Amazon rejected the ${stage} step (${path})${
+    detail === undefined ? "" : `: ${detail}`
+  }`;
+  return stage === "verification"
+    ? new VerificationRequiredError(message)
+    : new CredentialRejectedError(message);
 }
 
 function sanitizeServerMessage(value: string, email: string): string {

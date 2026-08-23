@@ -1,12 +1,19 @@
+import { PrimaryCredentialRejectedError } from "../../port/authentication.ts";
+import { AuthenticationRequiredError } from "../../port/source.ts";
+
 export class MoneyForwardError extends Error {
   override name = "MoneyForwardError";
 }
 
-export class AuthenticationFailedError extends MoneyForwardError {
+export class AuthenticationFailedError extends PrimaryCredentialRejectedError {
   override name = "MoneyForwardAuthenticationFailedError";
+
+  constructor(message = "Money Forward rejected the email or password") {
+    super("moneyforward", message);
+  }
 }
 
-export class VerificationFailedError extends AuthenticationFailedError {
+export class VerificationFailedError extends MoneyForwardError {
   override name = "MoneyForwardVerificationFailedError";
 }
 
@@ -25,4 +32,3 @@ export class UnexpectedPageError extends MoneyForwardError {
 export class ParseError extends MoneyForwardError {
   override name = "MoneyForwardParseError";
 }
-import { AuthenticationRequiredError } from "../../port/source.ts";

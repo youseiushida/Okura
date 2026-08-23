@@ -12,9 +12,7 @@ export interface SessionVaultOptions {
  * 認証セッションの暗号化永続化Port。
  *
  * 実装例:
- * - Windows DPAPI
- * - macOS Keychain
- * - Linux Secret Service
+ * - OS secret store由来の鍵とAES-GCM file vault
  * - テスト用MemorySessionVault
  */
 export interface SessionVaultPort {

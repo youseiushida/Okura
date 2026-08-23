@@ -55,14 +55,22 @@ export async function performLogin(
     "mfid_user[email]": email,
     "mfid_user[password]": "",
   }, options.signal);
-  requireIDPage(page, context, PASSWORD_PATH, "email");
+  if (!isIDPage(page, context, PASSWORD_PATH)) {
+    if (isCredentialEntryPage(page, context)) {
+      throw new AuthenticationFailedError("Money Forward rejected the email");
+    }
+    throw new UnexpectedPageError("Money Forward email step returned an unexpected page");
+  }
 
   page = await submitAuthPage(context, page, SIGN_IN_PATH, {
     "mfid_user[email]": email,
     "mfid_user[password]": credentials.password,
   }, options.signal);
   if (!isIDPage(page, context, EMAIL_OTP_PATH)) {
-    throw new AuthenticationFailedError("Money Forward rejected the email or password");
+    if (isCredentialEntryPage(page, context)) {
+      throw new AuthenticationFailedError("Money Forward rejected the email or password");
+    }
+    throw new UnexpectedPageError("Money Forward password step returned an unexpected page");
   }
 
   await options.interaction.progress.publish({
@@ -123,7 +131,7 @@ export async function performLogin(
     await skipPasskeyPromotion(context, passkeyPage, options.signal);
   }
   if (!(await validateCurrentSession(context, options))) {
-    throw new AuthenticationFailedError("Money Forward login did not create a valid session");
+    throw new UnexpectedPageError("Money Forward login did not create a valid session");
   }
 }
 
@@ -205,7 +213,12 @@ async function skipPasskeyPromotion(
   page: AuthPage,
   signal?: AbortSignal,
 ): Promise<void> {
-  requireIDPage(page, context, PASSKEY_PROMOTION_PATH, "OTP");
+  requireIDPage(
+    page,
+    context,
+    PASSKEY_PROMOTION_PATH,
+    () => new VerificationFailedError("Money Forward rejected the OTP step"),
+  );
   const parameters = camelCaseOAuthParameters(page.url);
   const collectURL = new URL(PASSKEY_COLLECT_PATH, context.idBaseURL);
   collectURL.searchParams.set("event", "passkey_rejected");
@@ -285,10 +298,10 @@ function requireIDPage(
   page: AuthPage,
   context: MoneyForwardContext,
   path: string,
-  stage: string,
+  failure: () => Error,
 ): void {
   if (!isIDPage(page, context, path)) {
-    throw new AuthenticationFailedError(`Money Forward rejected the ${stage} step`);
+    throw failure();
   }
 }
 
@@ -300,6 +313,10 @@ function requireIDOrigin(page: AuthPage, context: MoneyForwardContext): void {
 
 function isIDPage(page: AuthPage, context: MoneyForwardContext, path: string): boolean {
   return page.url.origin === context.idBaseURL.origin && page.url.pathname === path;
+}
+
+function isCredentialEntryPage(page: AuthPage, context: MoneyForwardContext): boolean {
+  return [SIGN_IN_PATH, EMAIL_PATH, PASSWORD_PATH].some((path) => isIDPage(page, context, path));
 }
 
 function camelCaseOAuthParameters(url: URL): URLSearchParams {

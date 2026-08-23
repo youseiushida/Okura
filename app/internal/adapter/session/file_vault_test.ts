@@ -2,33 +2,11 @@ import { assertEquals, assertStringIncludes } from "@std/assert/";
 import { join } from "node:path";
 import { createProviderConnection } from "../../model/connection.ts";
 import type { ProviderSessionSnapshot } from "../../port/authentication.ts";
-import {
-  bindLegacySnapshotToConnection,
-  FileSessionVault,
-  WindowsDPAPIProtector,
-} from "./dpapi_vault.ts";
+import { type DataProtector, FileSessionVault } from "./file_vault.ts";
 
-Deno.test("legacy DPAPI snapshot is bound to the selected connection", () => {
-  const key = createProviderConnection("amazon", "personal");
-  assertEquals(
-    bindLegacySnapshotToConnection(
-      { schemaVersion: 1, provider: "amazon", capturedAt: "2026-08-23T00:00:00Z", payload: {} },
-      key,
-    ),
-    {
-      schemaVersion: 1,
-      provider: "amazon",
-      connectionID: key.id,
-      capturedAt: "2026-08-23T00:00:00Z",
-      payload: {},
-    },
-  );
-});
-
-Deno.test("FileSessionVault persists an opaque DPAPI-encrypted snapshot atomically", async () => {
-  if (Deno.build.os !== "windows") return;
+Deno.test("FileSessionVault persists an opaque encrypted snapshot atomically", async () => {
   const root = await Deno.makeTempDir({ prefix: "okura-session-vault-test-" });
-  const vault = new FileSessionVault(root, new WindowsDPAPIProtector());
+  const vault = new FileSessionVault(root, new TestProtector());
   const key = createProviderConnection("amazon", "personal");
   const first = snapshot(key.id, "first-secret-cookie");
   const second = snapshot(key.id, "second-secret-cookie");
@@ -50,6 +28,20 @@ Deno.test("FileSessionVault persists an opaque DPAPI-encrypted snapshot atomical
     await Deno.remove(root, { recursive: true });
   }
 });
+
+class TestProtector implements DataProtector {
+  protect(value: Uint8Array): Promise<Uint8Array> {
+    return Promise.resolve(transform(value));
+  }
+
+  unprotect(value: Uint8Array): Promise<Uint8Array> {
+    return Promise.resolve(transform(value));
+  }
+}
+
+function transform(value: Uint8Array): Uint8Array {
+  return Uint8Array.from(value, (byte) => byte ^ 0xa5);
+}
 
 function snapshot(connectionID: string, cookie: string): ProviderSessionSnapshot<"amazon"> {
   return {

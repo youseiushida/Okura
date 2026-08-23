@@ -1,9 +1,11 @@
 import { AuthCoordinator, type EnsureAuthenticationResult } from "./authentication.ts";
+import type { CredentialInput } from "./credentials.ts";
 import type { ProviderConnection } from "../model/connection.ts";
 import type { AssetBalance } from "../model/asset.ts";
 import type { CashIn, CashOut, Transfer } from "../model/transaction.ts";
 import type { AuthInteraction } from "../port/auth_interaction.ts";
-import type { AuthenticationOptions, AuthenticationPort } from "../port/authentication.ts";
+import type { AuthenticationPort } from "../port/authentication.ts";
+import type { CredentialVaultPort } from "../port/credential_vault.ts";
 import type { ProviderID } from "../port/provider.ts";
 import type { SessionVaultPort } from "../port/session_vault.ts";
 import type {
@@ -14,13 +16,12 @@ import type {
   TransferSource,
 } from "../port/source.ts";
 
-export interface FetchRequest<Credentials> {
+export interface FetchRequest<Credentials, Provider extends ProviderID = ProviderID> {
   readonly period: Period;
   readonly forceReauthentication?: boolean;
   readonly interaction: AuthInteraction;
-  readonly getCredentials: (
-    options?: AuthenticationOptions,
-  ) => Promise<Credentials>;
+  readonly credentialInput: CredentialInput<Provider, Credentials>;
+  readonly saveCredentials?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -47,19 +48,22 @@ export interface CashOutFetchUseCase<
   Credentials,
   Provider extends ProviderID = ProviderID,
 > {
-  execute(request: FetchRequest<Credentials>): Promise<CashOutFetchResult<Provider>>;
+  execute(request: FetchRequest<Credentials, Provider>): Promise<CashOutFetchResult<Provider>>;
 }
 
 export interface FinancialSnapshotFetchUseCase<
   Credentials,
   Provider extends ProviderID = ProviderID,
 > {
-  execute(request: FetchRequest<Credentials>): Promise<FinancialSnapshotFetchResult<Provider>>;
+  execute(
+    request: FetchRequest<Credentials, Provider>,
+  ): Promise<FinancialSnapshotFetchResult<Provider>>;
 }
 
 interface AuthenticatedDependencies<Provider extends ProviderID, Credentials> {
   readonly authentication: AuthenticationPort<Provider, Credentials>;
   readonly sessionVault: SessionVaultPort;
+  readonly credentialVault: CredentialVaultPort;
 }
 
 interface CashOutDependencies<Provider extends ProviderID, Credentials>
@@ -83,7 +87,9 @@ export class FetchCashOuts<Provider extends ProviderID, Credentials>
     this.#dependencies = dependencies;
   }
 
-  async execute(request: FetchRequest<Credentials>): Promise<CashOutFetchResult<Provider>> {
+  async execute(
+    request: FetchRequest<Credentials, Provider>,
+  ): Promise<CashOutFetchResult<Provider>> {
     const authentication = await authenticate(this.#dependencies, request);
     const cashOuts = await this.#dependencies.cashOuts.fetchCashOuts(request.period, {
       signal: request.signal,
@@ -107,7 +113,7 @@ export class FetchFinancialSnapshot<Provider extends ProviderID, Credentials>
   }
 
   async execute(
-    request: FetchRequest<Credentials>,
+    request: FetchRequest<Credentials, Provider>,
   ): Promise<FinancialSnapshotFetchResult<Provider>> {
     const authentication = await authenticate(this.#dependencies, request);
     const snapshot = await fetchFinancialSnapshot(this.#dependencies, request);
@@ -126,15 +132,17 @@ export class FetchFinancialSnapshot<Provider extends ProviderID, Credentials>
 
 async function authenticate<Provider extends ProviderID, Credentials>(
   dependencies: AuthenticatedDependencies<Provider, Credentials>,
-  request: FetchRequest<Credentials>,
+  request: FetchRequest<Credentials, Provider>,
 ): Promise<EnsureAuthenticationResult> {
   return await new AuthCoordinator(
     dependencies.authentication,
     dependencies.sessionVault,
+    dependencies.credentialVault,
   ).ensureAuthenticated({
     key: dependencies.authentication.connection,
     interaction: request.interaction,
-    getCredentials: request.getCredentials,
+    credentialInput: request.credentialInput,
+    saveCredentials: request.saveCredentials,
     forceReauthentication: request.forceReauthentication,
     signal: request.signal,
   });
@@ -142,7 +150,7 @@ async function authenticate<Provider extends ProviderID, Credentials>(
 
 async function fetchFinancialSnapshot<Provider extends ProviderID, Credentials>(
   dependencies: FinancialSnapshotDependencies<Provider, Credentials>,
-  request: FetchRequest<Credentials>,
+  request: FetchRequest<Credentials, Provider>,
 ): Promise<FinancialSnapshot> {
   const options = { signal: request.signal };
   const [assetBalances, cashIns, cashOuts, transfers] = await Promise.all([

@@ -1,4 +1,5 @@
 import type { CashOutFetchUseCase } from "../application/fetch.ts";
+import type { CredentialInput } from "../application/credentials.ts";
 import {
   type FetchArguments,
   parseAmazonFetchArguments,
@@ -7,9 +8,9 @@ import {
   type SupportedProviderID,
 } from "./arguments.ts";
 import {
-  readAmazonCredentials,
-  readJCBCredentials,
-  readMoneyForwardCredentials,
+  amazonCredentialInput,
+  jcbCredentialInput,
+  moneyForwardCredentialInput,
 } from "./credentials.ts";
 import { createAuthInteraction, reportAuthentication } from "./interaction.ts";
 import { presentCashOuts, presentFinancialSnapshot } from "./presenter.ts";
@@ -36,7 +37,7 @@ async function runJCBFetch(args: string[], environment: CLIEnvironment): Promise
   return await runCashOutFetch(
     environment.createJCBFetch(options.connection, options.walletID),
     options,
-    () => readJCBCredentials(environment),
+    jcbCredentialInput(environment),
     environment,
   );
 }
@@ -46,7 +47,7 @@ async function runAmazonFetch(args: string[], environment: CLIEnvironment): Prom
   return await runCashOutFetch(
     environment.createAmazonFetch(options.connection, options.walletID),
     options,
-    () => readAmazonCredentials(environment),
+    amazonCredentialInput(environment),
     environment,
   );
 }
@@ -59,8 +60,9 @@ async function runMoneyForwardFetch(
   const result = await environment.createMoneyForwardFetch(options.connection).execute({
     period: options.period,
     forceReauthentication: options.reauthenticate,
+    saveCredentials: options.saveCredentials,
     interaction: createAuthInteraction(environment),
-    getCredentials: () => readMoneyForwardCredentials(environment),
+    credentialInput: moneyForwardCredentialInput(environment),
   });
 
   reportAuthentication(result.authentication, result.connection, environment);
@@ -68,17 +70,21 @@ async function runMoneyForwardFetch(
   return 0;
 }
 
-async function runCashOutFetch<Credentials>(
-  useCase: CashOutFetchUseCase<Credentials>,
-  options: Pick<FetchArguments, "period" | "periodLabels" | "format" | "reauthenticate">,
-  getCredentials: () => Promise<Credentials>,
+async function runCashOutFetch<Credentials, Provider extends SupportedProviderID>(
+  useCase: CashOutFetchUseCase<Credentials, Provider>,
+  options: Pick<
+    FetchArguments,
+    "period" | "periodLabels" | "format" | "reauthenticate" | "saveCredentials"
+  >,
+  credentialInput: CredentialInput<Provider, Credentials>,
   environment: CLIEnvironment,
 ): Promise<number> {
   const result = await useCase.execute({
     period: options.period,
     forceReauthentication: options.reauthenticate,
+    saveCredentials: options.saveCredentials,
     interaction: createAuthInteraction(environment),
-    getCredentials,
+    credentialInput,
   });
 
   reportAuthentication(result.authentication, result.connection, environment);

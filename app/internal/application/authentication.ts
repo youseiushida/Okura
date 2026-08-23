@@ -1,4 +1,6 @@
 import type { AuthInteraction } from "../port/auth_interaction.ts";
+import type { CredentialVaultPort } from "../port/credential_vault.ts";
+import { PrimaryCredentialRejectedError } from "../port/authentication.ts";
 import type {
   AuthenticationOptions,
   AuthenticationPort,
@@ -7,6 +9,13 @@ import type {
 } from "../port/authentication.ts";
 import type { ProviderID } from "../port/provider.ts";
 import type { SessionKey, SessionVaultOptions, SessionVaultPort } from "../port/session_vault.ts";
+import {
+  CredentialCoordinator,
+  type CredentialInput,
+  type CredentialPersistence,
+  type CredentialSource,
+  SavedCredentialLoginError,
+} from "./credentials.ts";
 
 export type SessionPersistence =
   | {
@@ -24,6 +33,17 @@ export interface EnsureAuthenticationResult {
    */
   readonly session: "reused" | "created";
   readonly persistence: SessionPersistence;
+
+  readonly credentials:
+    | {
+      readonly status: "not-required";
+      readonly persistence: CredentialPersistence;
+    }
+    | {
+      readonly status: "used";
+      readonly source: CredentialSource;
+      readonly persistence: CredentialPersistence;
+    };
 
   /**
    * 壊れた・非対応の保存snapshotから新規ログインへ復旧した場合だけ返す。
@@ -57,9 +77,10 @@ export interface EnsureAuthenticationOptions<
   /**
    * 保存済みセッションが利用できなかった場合にだけ呼ばれる。
    */
-  readonly getCredentials: (
-    options?: AuthenticationOptions,
-  ) => Promise<Credentials>;
+  readonly credentialInput: CredentialInput<Provider, Credentials>;
+
+  /** 新規login成功後にだけ一次認証情報をOS credential storeへ保存する。 */
+  readonly saveCredentials?: boolean;
 }
 
 /**
@@ -71,19 +92,22 @@ export interface EnsureAuthenticationOptions<
 export class AuthCoordinator<Provider extends ProviderID, Credentials> {
   readonly #auth: AuthenticationPort<Provider, Credentials>;
   readonly #vault: SessionVaultPort;
+  readonly #credentialVault: CredentialVaultPort;
 
   constructor(
     auth: AuthenticationPort<Provider, Credentials>,
     vault: SessionVaultPort,
+    credentialVault: CredentialVaultPort,
   ) {
     this.#auth = auth;
     this.#vault = vault;
+    this.#credentialVault = credentialVault;
   }
 
   async ensureAuthenticated(
     options: EnsureAuthenticationOptions<Provider, Credentials>,
   ): Promise<EnsureAuthenticationResult> {
-    const { key, interaction, getCredentials, signal } = options;
+    const { key, interaction, signal } = options;
 
     if (key.provider !== this.#auth.provider) {
       throw new TypeError(
@@ -121,6 +145,12 @@ export class AuthCoordinator<Provider extends ProviderID, Credentials> {
           return {
             session: "reused",
             persistence: await this.#persist(key, { signal }),
+            credentials: {
+              status: "not-required",
+              persistence: options.saveCredentials === true
+                ? { status: "skipped", reason: "session-reused" }
+                : { status: "not-requested" },
+            },
           };
         }
       } else {
@@ -140,11 +170,15 @@ export class AuthCoordinator<Provider extends ProviderID, Credentials> {
     this.#auth.clearSession();
 
     signal?.throwIfAborted();
-    const credentials = await getCredentials({ signal });
+    const credentialCoordinator = new CredentialCoordinator(
+      this.#credentialVault,
+      options.credentialInput,
+    );
+    const credentials = await credentialCoordinator.acquire(key, { signal });
     signal?.throwIfAborted();
 
     try {
-      await this.#auth.login(credentials, { interaction, signal });
+      await this.#auth.login(credentials.value, { interaction, signal });
       signal?.throwIfAborted();
     } catch (error) {
       // clearSessionが失敗しても本来の認証エラーを失わない。
@@ -153,10 +187,21 @@ export class AuthCoordinator<Provider extends ProviderID, Credentials> {
       } catch {
         // clearSessionはbest effort。呼び出し元には認証失敗を返す。
       }
+      signal?.throwIfAborted();
+      if (
+        credentials.source === "keyring" &&
+        error instanceof PrimaryCredentialRejectedError &&
+        error.provider === key.provider
+      ) {
+        throw new SavedCredentialLoginError(key.provider, { cause: error });
+      }
       throw error;
     }
 
     const persistence = await this.#persist(key, { signal });
+    const credentialPersistence = options.saveCredentials === true
+      ? await credentialCoordinator.save(key, credentials, { signal })
+      : { status: "not-requested" } as const;
     if (
       recovery?.storedSnapshot === "retained" &&
       persistence.status === "saved"
@@ -166,6 +211,11 @@ export class AuthCoordinator<Provider extends ProviderID, Credentials> {
     return {
       session: "created",
       persistence,
+      credentials: {
+        status: "used",
+        source: credentials.source,
+        persistence: credentialPersistence,
+      },
       ...(recovery === undefined ? {} : { recovery }),
     };
   }

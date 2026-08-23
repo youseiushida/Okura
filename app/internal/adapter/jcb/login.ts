@@ -109,7 +109,12 @@ export async function performLogin(
     await discardLimited(response, MAX_RESPONSE_BYTES);
     if (!isMypageResponse(response)) {
       const landingPath = response.url === "" ? "" : new URL(response.url).pathname;
-      throw new AuthenticationFailedError(response.status, landingPath);
+      if (isAuthenticationResponse(response)) {
+        throw new AuthenticationFailedError(response.status, landingPath);
+      }
+      throw new JCBError(
+        `login returned unexpected HTTP ${response.status} at ${JSON.stringify(landingPath)}`,
+      );
     }
     context.userAgent = form.userAgent || userAgent;
   } finally {
@@ -263,6 +268,7 @@ function normalizedPath(url: URL): string {
 
 function isAuthenticationResponse(response: Response): boolean {
   if (response.status === 401) return true;
+  if (response.status < 200 || response.status >= 400) return false;
   if (response.url === "") return false;
   const path = normalizedPath(new URL(response.url));
   return path === normalizedPath(new URL(LOGIN_PATH, "https://invalid.local")) ||

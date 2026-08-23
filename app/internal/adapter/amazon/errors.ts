@@ -1,5 +1,16 @@
+import { PrimaryCredentialRejectedError } from "../../port/authentication.ts";
+import { AuthenticationRequiredError } from "../../port/source.ts";
+
 export class AmazonError extends Error {
   override name = "AmazonError";
+}
+
+export class CredentialRejectedError extends PrimaryCredentialRejectedError {
+  override name = "AmazonCredentialRejectedError";
+
+  constructor(message = "Amazon rejected the email or password") {
+    super("amazon", message);
+  }
 }
 
 export class AuthenticationFailedError extends AmazonError {
@@ -29,4 +40,3 @@ export class UnauthenticatedError extends AuthenticationRequiredError {
 export class UnexpectedPageError extends AmazonError {
   override name = "AmazonUnexpectedPageError";
 }
-import { AuthenticationRequiredError } from "../../port/source.ts";

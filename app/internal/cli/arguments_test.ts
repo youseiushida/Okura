@@ -45,12 +45,14 @@ Deno.test("Amazon fetch arguments use the default wallet and profile", () => {
     "--to",
     "2026-08-23",
     "--reauth",
+    "--save-credentials",
   ]);
 
   assertEquals(parsed.walletID, "amazon");
   assertEquals(parsed.connection.profile, "default");
   assertEquals(parsed.connection.id, "amazon/default");
   assertEquals(parsed.reauthenticate, true);
+  assertEquals(parsed.saveCredentials, true);
   assertEquals(parsed.period.from.toISOString(), "2026-07-31T15:00:00.000Z");
   assertEquals(parsed.period.to.toISOString(), "2026-08-23T15:00:00.000Z");
 });

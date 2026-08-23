@@ -2,6 +2,7 @@ import type { CashOutFetchUseCase, FinancialSnapshotFetchUseCase } from "../appl
 import type { ProviderConnection } from "../model/connection.ts";
 import type { EmailPasswordCredentials, UserIDPasswordCredentials } from "../port/credentials.ts";
 import type { SessionVaultPort } from "../port/session_vault.ts";
+import type { CredentialVaultPort } from "../port/credential_vault.ts";
 
 export interface CLIIO {
   getEnv(name: string): string | undefined;
@@ -13,6 +14,7 @@ export interface CLIIO {
 
 export interface CLIEnvironment extends CLIIO {
   createSessionVault(): SessionVaultPort;
+  createCredentialVault(): CredentialVaultPort;
   createJCBFetch(
     connection: ProviderConnection<"jcb">,
     walletID: string,

@@ -47,6 +47,20 @@ export function reportAuthentication(
       }`,
     );
   }
+  if (result.credentials.persistence.status === "skipped") {
+    io.warn(
+      "Credentials were not saved because an existing session was reused; " +
+        "run with --reauth --save-credentials to perform a new login.",
+    );
+  } else if (result.credentials.persistence.status === "saved") {
+    io.warn(`Saved credentials for connection ${connection.id} in the OS credential store.`);
+  } else if (result.credentials.persistence.status === "failed") {
+    io.warn(
+      `Authenticated, but the credentials could not be saved: ${
+        errorMessage(result.credentials.persistence.error)
+      }`,
+    );
+  }
 }
 
 function errorMessage(error: unknown): string {

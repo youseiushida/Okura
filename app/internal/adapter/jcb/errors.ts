@@ -1,3 +1,6 @@
+import { PrimaryCredentialRejectedError } from "../../port/authentication.ts";
+import { AuthenticationRequiredError } from "../../port/source.ts";
+
 export class JCBError extends Error {
   constructor(message: string, options?: ErrorOptions) {
     super(`jcb: ${message}`, options);
@@ -32,9 +35,10 @@ export class UnexpectedPageError extends JCBError {
   }
 }
 
-export class AuthenticationFailedError extends JCBError {
+export class AuthenticationFailedError extends PrimaryCredentialRejectedError {
   constructor(status: number, landingPath: string) {
     super(
+      "jcb",
       `MyJCB authentication failed: status ${status}, landing path ${JSON.stringify(landingPath)}`,
     );
   }
@@ -47,4 +51,3 @@ function formatJSTDate(value: Date): string {
   const day = String(shifted.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
-import { AuthenticationRequiredError } from "../../port/source.ts";
