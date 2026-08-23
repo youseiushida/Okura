@@ -4,6 +4,7 @@ import type {
   AuthenticationOptions,
   LoginOptions as PortLoginOptions,
 } from "../../port/authentication.ts";
+import type { EmailPasswordCredentials } from "../../port/credentials.ts";
 import {
   AuthenticationFailedError,
   UnexpectedPageError,
@@ -20,10 +21,7 @@ const CLAIM_PATH = "/ax/claim";
 const VERIFY_OTP_PATH = "/ap/cvf/approval/verifyOtp";
 const MAX_LOGIN_RESPONSE_BYTES = 2 << 20;
 
-export interface Credentials {
-  email: string;
-  password: string;
-}
+export type Credentials = EmailPasswordCredentials;
 
 export interface LoginTarget {
   session: HttpSession;

@@ -3,6 +3,7 @@ import type {
   AuthenticationOptions,
   LoginOptions as PortLoginOptions,
 } from "../../port/authentication.ts";
+import type { EmailPasswordCredentials } from "../../port/credentials.ts";
 import {
   extractCSRFToken,
   isCashFlowPage,
@@ -26,10 +27,7 @@ export const PASSKEY_FINALIZE_PATH = "/passkey_promotion/finalize_passkey_setup"
 const CASH_FLOW_PATH = "/cf";
 const MAX_OTP_ATTEMPTS = 3;
 
-export interface Credentials {
-  readonly email: string;
-  readonly password: string;
-}
+export type Credentials = EmailPasswordCredentials;
 
 export type LoginOptions = PortLoginOptions;
 

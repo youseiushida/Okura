@@ -2,8 +2,8 @@ import type { Fetcher } from "../../http/session.ts";
 import type { ProviderConnection } from "../../model/connection.ts";
 import { createWallet } from "../../model/account.ts";
 import type { WalletID } from "../../model/account.ts";
+import type { AuthenticationPort } from "../../port/authentication.ts";
 import type { CashOutSource } from "../../port/source.ts";
-import type { ProviderModule } from "../../provider/module.ts";
 import { JCBAdapter } from "./adapter.ts";
 import { JCBAuthentication } from "./authentication.ts";
 import { createJCBContext, JCB_PROVIDER_ID } from "./context.ts";
@@ -18,11 +18,12 @@ export interface Config {
   readonly login?: Omit<LoginOptions, "signal">;
 }
 
-export type JCBModule = ProviderModule<
-  typeof JCB_PROVIDER_ID,
-  Credentials,
-  { readonly cashOuts: CashOutSource }
->;
+interface JCBModule {
+  readonly auth: AuthenticationPort<typeof JCB_PROVIDER_ID, Credentials>;
+  readonly sources: {
+    readonly cashOuts: CashOutSource;
+  };
+}
 
 export function createJCBModule(config: Config): JCBModule {
   const context = createJCBContext(config);
@@ -33,7 +34,6 @@ export function createJCBModule(config: Config): JCBModule {
     { source: JCB_PROVIDER_ID, local_id: config.walletID },
   );
   return {
-    connection: config.connection,
     auth: new JCBAuthentication(context, config.login),
     sources: {
       cashOuts: new JCBAdapter(context, {

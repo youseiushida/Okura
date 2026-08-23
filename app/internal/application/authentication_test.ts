@@ -11,7 +11,7 @@ import type {
 } from "../port/authentication.ts";
 import type { ProviderID } from "../port/provider.ts";
 import type { SessionKey, SessionVaultOptions, SessionVaultPort } from "../port/session_vault.ts";
-import { AuthCoordinator } from "./coordinator.ts";
+import { AuthCoordinator } from "./authentication.ts";
 
 interface TestCredentials {
   readonly password: string;

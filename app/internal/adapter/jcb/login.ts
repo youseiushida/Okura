@@ -3,6 +3,7 @@ import {
   readTextLimited as readResponseTextLimited,
 } from "../../http/body.ts";
 import type { AuthenticationOptions } from "../../port/authentication.ts";
+import type { UserIDPasswordCredentials } from "../../port/credentials.ts";
 import { MAX_RESPONSE_BYTES } from "./adapter.ts";
 import { AuthenticationFailedError, JCBError } from "./errors.ts";
 import { executeProtectionIsolated } from "./protection_worker_client.ts";
@@ -16,10 +17,7 @@ export const DEFAULT_LOGIN_TIMEOUT_MS = 45_000;
 export const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36";
 
-export interface Credentials {
-  userID: string;
-  password: string;
-}
+export type Credentials = UserIDPasswordCredentials;
 
 export interface ProtectedForm {
   action: string;
