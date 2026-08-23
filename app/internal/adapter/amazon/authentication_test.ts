@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert/";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert/";
 import { AmazonAuthentication } from "./authentication.ts";
 import { createAmazonContext } from "./context.ts";
 
@@ -30,6 +30,20 @@ Deno.test("AmazonAuthentication snapshot round-trips cookies and requires valida
   );
 });
 
+Deno.test("AmazonAuthentication does not classify an ambiguous 403 as expired", async () => {
+  const context = createAmazonContext({
+    fetch: () =>
+      Promise.resolve(responseAt(
+        "https://www.amazon.co.jp/your-orders/orders",
+        "forbidden",
+        403,
+      )),
+  });
+  context.authenticationState = "restored";
+  await assertRejects(() => new AmazonAuthentication(context).validateSession());
+  assertEquals(context.authenticationState, "restored");
+});
+
 Deno.test("AmazonAuthentication returns typed rejection for foreign or unsupported snapshots", () => {
   const auth = new AmazonAuthentication(createAmazonContext());
   assertEquals(
@@ -53,8 +67,8 @@ Deno.test("AmazonAuthentication returns typed rejection for foreign or unsupport
   assertThrows(() => auth.captureSession(), TypeError);
 });
 
-function responseAt(url: string, body: string): Response {
-  const response = new Response(body, { status: 200 });
+function responseAt(url: string, body: string, status = 200): Response {
+  const response = new Response(body, { status });
   Object.defineProperty(response, "url", { value: url });
   return response;
 }

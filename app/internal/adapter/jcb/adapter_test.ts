@@ -4,14 +4,17 @@ import {
   assertMatch,
   assertNotEquals,
   assertRejects,
+  assertStrictEquals,
   assertThrows,
 } from "@std/assert/";
+import { createWallet } from "../../model/account.ts";
 import { DETAIL_MENU_LINK_ID, DETAIL_MENU_PATH, DETAIL_PATH, JCBAdapter } from "./adapter.ts";
 import { createJCBContext } from "./context.ts";
+import { JCBAuthentication } from "./authentication.ts";
 import { MYPAGE_PATH } from "./login.ts";
 import { PeriodUnavailableError, UnauthenticatedError } from "./errors.ts";
 import { parseStatement, statementSequences } from "./parser.ts";
-import { hasCause, jstDate, startTestServer, statementHTML } from "./test_util.ts";
+import { jstDate, startTestServer, statementHTML } from "./test_util.ts";
 
 Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async () => {
   const requestedSequences: string[] = [];
@@ -43,8 +46,9 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
   try {
     const context = createJCBContext({ baseURL: server.url });
     context.authenticationState = "valid";
+    context.userAgent = "test-agent";
     const adapter = new JCBAdapter(context, {
-      walletID: "wallet-jcb",
+      wallet: createWallet(context.connection, "wallet-jcb", "My JCB"),
       now: () => jstDate(2026, 8, 22, 12),
     });
     const cashOuts = await adapter.fetchCashOuts({
@@ -57,11 +61,11 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
     const cashOut = cashOuts[0];
     assert(cashOut !== undefined);
     assertEquals(cashOut.amount, 1234);
-    assertEquals(cashOut.from, "wallet-jcb");
+    assertEquals(cashOut.from.name, "My JCB");
     assertEquals(cashOut.to.name, "ACME & STORE");
     assertEquals(cashOut.to.metadata.approval_number, "654321");
     assertEquals(cashOut.to.metadata.description, "海外利用");
-    assertMatch(cashOut.id, /^jcb:[0-9a-f]{64}$/);
+    assertMatch(cashOut.id, /^jcb\/default:transaction:[0-9a-f]{64}$/);
   } finally {
     await server.close();
   }
@@ -76,7 +80,7 @@ Deno.test("JCBAdapter.fetchCashOuts detects a login redirect", async () => {
     const context = createJCBContext({ baseURL: server.url });
     context.authenticationState = "valid";
     const adapter = new JCBAdapter(context, {
-      walletID: "wallet-jcb",
+      wallet: createWallet(context.connection, "wallet-jcb", "My JCB"),
       now: () => jstDate(2026, 8, 22, 12),
     });
     const error = await assertRejects(() =>
@@ -85,10 +89,60 @@ Deno.test("JCBAdapter.fetchCashOuts detects a login redirect", async () => {
         to: jstDate(2026, 8, 17),
       })
     );
-    assert(hasCause(error, (candidate) => candidate instanceof UnauthenticatedError));
+    assert(error instanceof UnauthenticatedError);
+    assertEquals(context.authenticationState, "expired");
+    assertThrows(() => new JCBAuthentication(context).captureSession(), TypeError);
   } finally {
     await server.close();
   }
+});
+
+Deno.test("JCBAdapter does not expire a session on an ambiguous 403", async () => {
+  const context = createJCBContext({
+    fetch: (input) =>
+      Promise.resolve(responseAt(
+        new URL(input instanceof Request ? input.url : input).href,
+        "forbidden",
+        403,
+      )),
+  });
+  context.authenticationState = "valid";
+  const adapter = new JCBAdapter(context, {
+    wallet: createWallet(context.connection, "wallet-jcb", "My JCB"),
+    now: () => jstDate(2026, 8, 22, 12),
+  });
+
+  await assertRejects(() =>
+    adapter.fetchCashOuts({
+      from: jstDate(2026, 8, 16),
+      to: jstDate(2026, 8, 17),
+    })
+  );
+  assertEquals(context.authenticationState, "valid");
+});
+
+Deno.test("JCBAdapter preserves AbortSignal reason", async () => {
+  const controller = new AbortController();
+  const reason = new DOMException("cancelled", "AbortError");
+  controller.abort(reason);
+  const context = createJCBContext({
+    fetch: (_input, init) => {
+      init?.signal?.throwIfAborted();
+      return Promise.reject(new Error("request should have been aborted"));
+    },
+  });
+  context.authenticationState = "valid";
+  const adapter = new JCBAdapter(context, {
+    wallet: createWallet(context.connection, "wallet-jcb", "My JCB"),
+    now: () => jstDate(2026, 8, 22, 12),
+  });
+  const error = await assertRejects(() =>
+    adapter.fetchCashOuts(
+      { from: jstDate(2026, 8, 16), to: jstDate(2026, 8, 17) },
+      { signal: controller.signal },
+    )
+  );
+  assertStrictEquals(error, reason);
 });
 
 Deno.test("statementSequences validates the available 15 cycles", () => {
@@ -125,3 +179,9 @@ Deno.test("parseStatement skips refunds and keeps duplicate IDs unique", () => {
   assertEquals(parsed.rows[0]?.amount, 1000);
   assertNotEquals(parsed.rows[0]?.id, parsed.rows[1]?.id);
 });
+
+function responseAt(url: string, body: string, status = 200): Response {
+  const response = new Response(body, { status });
+  Object.defineProperty(response, "url", { value: url });
+  return response;
+}

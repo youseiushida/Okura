@@ -5,9 +5,11 @@ export class JCBError extends Error {
   }
 }
 
-export class UnauthenticatedError extends JCBError {
+export class UnauthenticatedError extends AuthenticationRequiredError {
+  override name = "JCBUnauthenticatedError";
+
   constructor() {
-    super("unauthenticated MyJCB session");
+    super("jcb", "jcb: unauthenticated MyJCB session");
   }
 }
 
@@ -45,3 +47,4 @@ function formatJSTDate(value: Date): string {
   const day = String(shifted.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
+import { AuthenticationRequiredError } from "../../port/source.ts";

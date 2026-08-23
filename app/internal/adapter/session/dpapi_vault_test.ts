@@ -1,15 +1,37 @@
 import { assertEquals, assertStringIncludes } from "@std/assert/";
 import { join } from "node:path";
+import { createProviderConnection } from "../../model/connection.ts";
 import type { ProviderSessionSnapshot } from "../../port/authentication.ts";
-import { FileSessionVault, WindowsDPAPIProtector } from "./dpapi_vault.ts";
+import {
+  bindLegacySnapshotToConnection,
+  FileSessionVault,
+  WindowsDPAPIProtector,
+} from "./dpapi_vault.ts";
+
+Deno.test("legacy DPAPI snapshot is bound to the selected connection", () => {
+  const key = createProviderConnection("amazon", "personal");
+  assertEquals(
+    bindLegacySnapshotToConnection(
+      { schemaVersion: 1, provider: "amazon", capturedAt: "2026-08-23T00:00:00Z", payload: {} },
+      key,
+    ),
+    {
+      schemaVersion: 1,
+      provider: "amazon",
+      connectionID: key.id,
+      capturedAt: "2026-08-23T00:00:00Z",
+      payload: {},
+    },
+  );
+});
 
 Deno.test("FileSessionVault persists an opaque DPAPI-encrypted snapshot atomically", async () => {
   if (Deno.build.os !== "windows") return;
   const root = await Deno.makeTempDir({ prefix: "okura-session-vault-test-" });
   const vault = new FileSessionVault(root, new WindowsDPAPIProtector());
-  const key = { provider: "amazon" as const, profile: "personal" };
-  const first = snapshot("first-secret-cookie");
-  const second = snapshot("second-secret-cookie");
+  const key = createProviderConnection("amazon", "personal");
+  const first = snapshot(key.id, "first-secret-cookie");
+  const second = snapshot(key.id, "second-secret-cookie");
   try {
     await vault.save(key, first);
     await vault.save(key, second);
@@ -29,10 +51,11 @@ Deno.test("FileSessionVault persists an opaque DPAPI-encrypted snapshot atomical
   }
 });
 
-function snapshot(cookie: string): ProviderSessionSnapshot<"amazon"> {
+function snapshot(connectionID: string, cookie: string): ProviderSessionSnapshot<"amazon"> {
   return {
     schemaVersion: 1,
     provider: "amazon",
+    connectionID,
     capturedAt: "2026-08-23T00:00:00.000Z",
     payload: { cookie },
   };

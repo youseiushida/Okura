@@ -1,5 +1,6 @@
-import type { WalletID } from "../../model/account.ts";
+import type { Wallet } from "../../model/account.ts";
 import { readBytesLimited } from "../../http/body.ts";
+import { rethrowAbort } from "../../error/abort.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { JCBError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
@@ -13,19 +14,22 @@ export const DETAIL_MENU_LINK_ID = "myj_main_debitDetailMenu";
 export const MAX_RESPONSE_BYTES = 4 << 20;
 
 export interface Config {
-  readonly walletID: WalletID;
+  readonly wallet: Wallet;
   readonly now?: () => Date;
 }
 
 export class JCBAdapter implements CashOutSource {
   readonly #context: JCBContext;
-  readonly walletID: WalletID;
+  readonly wallet: Wallet;
   readonly now: () => Date;
 
   constructor(context: JCBContext, config: Config) {
-    if (config.walletID.trim() === "") throw new TypeError("jcb: wallet ID is required");
+    if (config.wallet.id.trim() === "") throw new TypeError("jcb: wallet ID is required");
+    if (config.wallet.connectionID !== context.connection.id) {
+      throw new TypeError("jcb: wallet belongs to another connection");
+    }
     this.#context = context;
-    this.walletID = config.walletID;
+    this.wallet = config.wallet;
     this.now = config.now ?? (() => new Date());
   }
 
@@ -36,6 +40,8 @@ export class JCBAdapter implements CashOutSource {
     try {
       await this.#openStatementMenu(options.signal);
     } catch (error) {
+      rethrowAbort(error, options.signal);
+      if (error instanceof UnauthenticatedError) throw error;
       throw new JCBError(`open statement menu: ${errorMessage(error)}`, { cause: error });
     }
     const cashOuts: CashOut[] = [];
@@ -44,6 +50,8 @@ export class JCBAdapter implements CashOutSource {
       try {
         rows = await this.#fetchStatement(sequence, options.signal);
       } catch (error) {
+        rethrowAbort(error, options.signal);
+        if (error instanceof UnauthenticatedError) throw error;
         throw new JCBError(`fetch statement sequence ${sequence}: ${errorMessage(error)}`, {
           cause: error,
         });
@@ -55,7 +63,7 @@ export class JCBAdapter implements CashOutSource {
         ) {
           continue;
         }
-        cashOuts.push(statementRowToCashOut(row, this.walletID));
+        cashOuts.push(statementRowToCashOut(row, this.wallet));
       }
     }
     cashOuts.sort((left, right) =>
@@ -74,7 +82,7 @@ export class JCBAdapter implements CashOutSource {
     if (this.#context.userAgent !== "") headers.set("User-Agent", this.#context.userAgent);
 
     const response = await this.#context.session.request(detailURL, { headers, signal });
-    if (isLoginResponse(response)) throw new UnauthenticatedError();
+    if (isLoginResponse(response)) this.#authenticationRequired();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
     const html = await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
     const parsed = parseStatement(html);
@@ -91,7 +99,7 @@ export class JCBAdapter implements CashOutSource {
     if (this.#context.userAgent !== "") headers.set("User-Agent", this.#context.userAgent);
 
     const response = await this.#context.session.request(menuURL, { headers, signal });
-    if (isLoginResponse(response)) throw new UnauthenticatedError();
+    if (isLoginResponse(response)) this.#authenticationRequired();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
     await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
   }
@@ -101,10 +109,15 @@ export class JCBAdapter implements CashOutSource {
     menuURL.searchParams.set("link_id", DETAIL_MENU_LINK_ID);
     return menuURL;
   }
+
+  #authenticationRequired(): never {
+    this.#context.authenticationState = "expired";
+    throw new UnauthenticatedError();
+  }
 }
 
 export function isLoginResponse(response: Response): boolean {
-  if (response.status === 401 || response.status === 403) return true;
+  if (response.status === 401) return true;
   const path = response.url === ""
     ? ""
     : new URL(response.url).pathname.toLowerCase().replace(/\/+$/, "");

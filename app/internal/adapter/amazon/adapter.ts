@@ -1,5 +1,7 @@
 import { readTextLimited } from "../../http/body.ts";
-import type { WalletID } from "../../model/account.ts";
+import { rethrowAbort } from "../../error/abort.ts";
+import type { Wallet } from "../../model/account.ts";
+import { scopedID } from "../../model/connection.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { AmazonError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
@@ -20,19 +22,22 @@ const MAX_PAGES_PER_YEAR = 200;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 export interface Config {
-  readonly walletID: WalletID;
+  readonly wallet: Wallet;
   readonly pageDelayMs?: number;
 }
 
 export class AmazonAdapter implements CashOutSource {
   readonly #context: AmazonContext;
-  readonly walletID: WalletID;
+  readonly wallet: Wallet;
   readonly pageDelayMs: number;
 
   constructor(context: AmazonContext, config: Config) {
-    if (config.walletID.trim() === "") throw new TypeError("amazon: wallet ID is required");
+    if (config.wallet.id.trim() === "") throw new TypeError("amazon: wallet ID is required");
+    if (config.wallet.connectionID !== context.connection.id) {
+      throw new TypeError("amazon: wallet belongs to another connection");
+    }
     this.#context = context;
-    this.walletID = config.walletID;
+    this.wallet = config.wallet;
     this.pageDelayMs = config.pageDelayMs ?? 250;
   }
 
@@ -46,6 +51,8 @@ export class AmazonAdapter implements CashOutSource {
       try {
         await this.#fetchYear(year, period, orders, options.signal);
       } catch (error) {
+        rethrowAbort(error, options.signal);
+        if (error instanceof UnauthenticatedError) throw error;
         if (error instanceof AmazonError) throw error;
         throw new AmazonError(`fetch Amazon orders for ${year}: ${errorMessage(error)}`, {
           cause: error,
@@ -79,7 +86,7 @@ export class AmazonAdapter implements CashOutSource {
         headers: orderHeaders(this.#context.baseURL.href, page === 0),
         signal,
       });
-      if (isAuthenticationResponse(response)) throw new UnauthenticatedError();
+      if (isAuthenticationResponse(response)) this.#authenticationRequired();
       if (response.status !== 200) {
         throw new AmazonError(`unexpected HTTP status ${response.status}`);
       }
@@ -98,12 +105,15 @@ export class AmazonAdapter implements CashOutSource {
           order.occurredAt.getTime() < period.from.getTime() ||
           order.occurredAt.getTime() >= period.to.getTime()
         ) continue;
-        const cashOut = orderToCashOut(order, this.walletID);
+        const cashOut = orderToCashOut(order, this.wallet);
         result.set(cashOut.id, cashOut);
       }
       for (let index = 0; index < parsed.references.length; index += 1) {
         const reference = parsed.references[index]!;
-        if (reference.canceled || result.has(`amazon:${reference.id}`)) continue;
+        if (
+          reference.canceled ||
+          result.has(scopedID(this.#context.connection.id, "transaction", reference.id))
+        ) continue;
         if (
           reference.occurredAt !== undefined &&
           (reference.occurredAt.getTime() < period.from.getTime() ||
@@ -127,7 +137,7 @@ export class AmazonAdapter implements CashOutSource {
         ) continue;
         const cashOut = orderToCashOut(
           { ...reference, occurredAt, amount: detail.amount },
-          this.walletID,
+          this.wallet,
         );
         result.set(cashOut.id, cashOut);
         await delay(this.pageDelayMs, signal);
@@ -152,7 +162,7 @@ export class AmazonAdapter implements CashOutSource {
       headers: detailHeaders(referer),
       signal,
     });
-    if (isAuthenticationResponse(response)) throw new UnauthenticatedError();
+    if (isAuthenticationResponse(response)) this.#authenticationRequired();
     if (response.status !== 200) {
       throw new AmazonError(`unexpected order detail HTTP status ${response.status}`);
     }
@@ -164,6 +174,11 @@ export class AmazonAdapter implements CashOutSource {
       );
     }
     return { ...detail, amount: detail.amount };
+  }
+
+  #authenticationRequired(): never {
+    this.#context.authenticationState = "expired";
+    throw new UnauthenticatedError();
   }
 }
 
@@ -212,7 +227,7 @@ function detailHeaders(referer: string): Headers {
 }
 
 function isAuthenticationResponse(response: Response): boolean {
-  if (response.status === 401 || response.status === 403) return true;
+  if (response.status === 401) return true;
   const path = response.url === "" ? "" : new URL(response.url).pathname;
   return path === "/ap/signin" || path === "/ax/claim" || path.startsWith("/ap/cvf/");
 }

@@ -124,7 +124,7 @@ export async function validateCurrentSession(
   });
   const html = await decodeLimitedResponse(response, MAX_LOGIN_RESPONSE_BYTES);
   if (isAuthenticationPage(response) || isVerificationPage(response, html)) return false;
-  if (response.status === 401 || response.status === 403) return false;
+  if (response.status === 401) return false;
   validateAuthenticatedHistory(response, html, target.baseURL);
   return true;
 }
@@ -134,7 +134,7 @@ export function validateAuthenticatedHistory(
   html: string,
   baseURL: URL,
 ): void {
-  if (isAuthenticationPage(response) || response.status === 401 || response.status === 403) {
+  if (isAuthenticationPage(response) || response.status === 401) {
     throw new AuthenticationFailedError();
   }
   if (response.status !== 200) {

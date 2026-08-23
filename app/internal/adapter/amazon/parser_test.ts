@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert/";
+import { createWallet } from "../../model/account.ts";
+import { createProviderConnection } from "../../model/connection.ts";
 import {
   isEmptyOrderPage,
   orderToCashOut,
@@ -31,9 +33,11 @@ Deno.test("parseOrderPage parses an Amazon.co.jp order card", () => {
   assertEquals(parsed.orders[0]?.amount, 1280);
   assertEquals(parsed.orders[0]?.itemTitles, ["ほしいも 500g"]);
 
-  const cashOut = orderToCashOut(parsed.orders[0]!, "amazon-wallet");
-  assertEquals(cashOut.id, "amazon:123-4567890-1234567");
-  assertEquals(cashOut.from, "amazon-wallet");
+  const connection = createProviderConnection("amazon", "personal");
+  const wallet = createWallet(connection, "amazon-wallet", "Amazon");
+  const cashOut = orderToCashOut(parsed.orders[0]!, wallet);
+  assertEquals(cashOut.id, `${connection.id}:transaction:123-4567890-1234567`);
+  assertEquals(cashOut.from, wallet);
   assertEquals(cashOut.to.metadata.source, "amazon");
 });
 

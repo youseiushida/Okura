@@ -51,6 +51,9 @@ export interface EnsureAuthenticationOptions<
    */
   readonly invalidSessionRecovery?: InvalidSessionRecovery;
 
+  /** 保存済みsnapshotを削除し、必ず新規ログインする。 */
+  readonly forceReauthentication?: boolean;
+
   /**
    * 保存済みセッションが利用できなかった場合にだけ呼ばれる。
    */
@@ -88,9 +91,20 @@ export class AuthCoordinator<Provider extends ProviderID, Credentials> {
           `authentication provider ${JSON.stringify(this.#auth.provider)}`,
       );
     }
+    if (key.id !== this.#auth.connection.id) {
+      throw new TypeError(
+        `session connection ${JSON.stringify(key.id)} does not match ` +
+          `authentication connection ${JSON.stringify(this.#auth.connection.id)}`,
+      );
+    }
 
     signal?.throwIfAborted();
-    const snapshot = await this.#vault.load(key, { signal });
+    if (options.forceReauthentication === true) {
+      await this.#vault.remove(key, { signal });
+    }
+    const snapshot = options.forceReauthentication === true
+      ? undefined
+      : await this.#vault.load(key, { signal });
     signal?.throwIfAborted();
 
     let recovery: EnsureAuthenticationResult["recovery"];
@@ -183,11 +197,17 @@ function assertSnapshotProvider<Provider extends ProviderID>(
   snapshot: ProviderSessionSnapshot<Provider>,
   key: SessionKey<Provider>,
 ): void {
-  if (snapshot.provider === key.provider) return;
+  if (snapshot.provider !== key.provider) {
+    throw new TypeError(
+      `snapshot provider ${JSON.stringify(snapshot.provider)} does not match ` +
+        `session key provider ${JSON.stringify(key.provider)}`,
+    );
+  }
+  if (snapshot.connectionID === key.id) return;
 
   throw new TypeError(
-    `snapshot provider ${JSON.stringify(snapshot.provider)} does not match ` +
-      `session key provider ${JSON.stringify(key.provider)}`,
+    `snapshot connection ${JSON.stringify(snapshot.connectionID)} does not match ` +
+      `session key connection ${JSON.stringify(key.id)}`,
   );
 }
 

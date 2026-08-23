@@ -18,14 +18,15 @@ export class VerificationRequiredError extends AmazonError {
   }
 }
 
-export class UnauthenticatedError extends AmazonError {
+export class UnauthenticatedError extends AuthenticationRequiredError {
   override name = "AmazonUnauthenticatedError";
 
   constructor() {
-    super("Amazon session is not authenticated; run login first");
+    super("amazon", "Amazon session is not authenticated; run login first");
   }
 }
 
 export class UnexpectedPageError extends AmazonError {
   override name = "AmazonUnexpectedPageError";
 }
+import { AuthenticationRequiredError } from "../../port/source.ts";

@@ -20,11 +20,13 @@ const SNAPSHOT_SCHEMA_VERSION = 1;
 
 export class JCBAuthentication implements AuthenticationPort<typeof JCB_PROVIDER_ID, Credentials> {
   readonly provider = JCB_PROVIDER_ID;
+  readonly connection;
   readonly #context: JCBContext;
   readonly #loginOptions: Omit<LoginOptions, "signal">;
 
   constructor(context: JCBContext, options: Omit<LoginOptions, "signal"> = {}) {
     this.#context = context;
+    this.connection = context.connection;
     this.#loginOptions = options;
   }
 
@@ -37,6 +39,8 @@ export class JCBAuthentication implements AuthenticationPort<typeof JCB_PROVIDER
         ? rejected("unsupported-schema")
         : rejected("malformed");
     }
+    if (typeof snapshot.connectionID !== "string") return rejected("malformed");
+    if (snapshot.connectionID !== this.connection.id) return rejected("connection-mismatch");
     if (!isValidCapturedAt(snapshot.capturedAt) || !isRecord(snapshot.payload)) {
       return rejected("malformed");
     }
@@ -81,6 +85,7 @@ export class JCBAuthentication implements AuthenticationPort<typeof JCB_PROVIDER
     return {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
       provider: this.provider,
+      connectionID: this.connection.id,
       capturedAt: new Date().toISOString(),
       payload: {
         cookies: serializeCookies(this.#context.session.cookies.capture()),

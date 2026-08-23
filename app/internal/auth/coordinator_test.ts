@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertStrictEquals } from "@std/assert/";
 import type { AuthInteraction } from "../port/auth_interaction.ts";
+import { createProviderConnection, type ProviderConnection } from "../model/connection.ts";
 import type {
   AuthenticationOptions,
   AuthenticationPort,
@@ -16,14 +17,12 @@ interface TestCredentials {
   readonly password: string;
 }
 
-const key: SessionKey = {
-  provider: "amazon",
-  profile: "default",
-};
+const key: SessionKey = createProviderConnection("amazon", "default");
 
 const storedSnapshot: ProviderSessionSnapshot = {
   schemaVersion: 1,
   provider: "amazon",
+  connectionID: key.id,
   capturedAt: "2026-08-23T00:00:00.000Z",
   payload: { cookie: "old" },
 };
@@ -31,6 +30,7 @@ const storedSnapshot: ProviderSessionSnapshot = {
 const capturedSnapshot: ProviderSessionSnapshot = {
   schemaVersion: 1,
   provider: "amazon",
+  connectionID: key.id,
   capturedAt: "2026-08-23T01:00:00.000Z",
   payload: { cookie: "refreshed" },
 };
@@ -46,6 +46,7 @@ const interaction: AuthInteraction = {
 
 class FakeAuthentication implements AuthenticationPort<ProviderID, TestCredentials> {
   readonly provider: ProviderID;
+  readonly connection: ProviderConnection;
   readonly events: string[];
   validation: SessionValidation = { status: "valid" };
   loginError?: unknown;
@@ -55,6 +56,7 @@ class FakeAuthentication implements AuthenticationPort<ProviderID, TestCredentia
   constructor(events: string[], provider: ProviderID = "amazon") {
     this.events = events;
     this.provider = provider;
+    this.connection = createProviderConnection(provider, "default");
   }
 
   restoreSession(_snapshot: unknown): SessionRestoreResult {
@@ -169,6 +171,22 @@ Deno.test("AuthCoordinator logs in lazily when no saved session exists", async (
     persistence: { status: "saved" },
   });
   assertEquals(events, ["load", "clear", "credentials", "login", "capture", "save"]);
+});
+
+Deno.test("AuthCoordinator force reauthentication removes and ignores a saved session", async () => {
+  const events: string[] = [];
+  const auth = new FakeAuthentication(events);
+  const vault = new FakeSessionVault(events, storedSnapshot);
+
+  const result = await new AuthCoordinator(auth, vault).ensureAuthenticated({
+    key,
+    interaction,
+    forceReauthentication: true,
+    getCredentials: () => Promise.resolve({ password: "new-secret" }),
+  });
+
+  assertEquals(result.session, "created");
+  assertEquals(events, ["remove", "clear", "login", "capture", "save"]);
 });
 
 Deno.test("AuthCoordinator replaces an expired session with a new login", async () => {

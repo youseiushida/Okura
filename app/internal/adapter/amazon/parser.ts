@@ -1,5 +1,6 @@
 import { parse } from "parse5";
-import type { WalletID } from "../../model/account.ts";
+import type { Wallet } from "../../model/account.ts";
+import { scopedID } from "../../model/connection.ts";
 import type { CashOut } from "../../model/transaction.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
@@ -147,7 +148,7 @@ export function isEmptyOrderPage(payload: string): boolean {
   return false;
 }
 
-export function orderToCashOut(order: AmazonOrder, walletID: WalletID): CashOut {
+export function orderToCashOut(order: AmazonOrder, wallet: Wallet): CashOut {
   const metadata: Record<string, string> = {
     source: "amazon",
     order_id: order.id,
@@ -155,10 +156,11 @@ export function orderToCashOut(order: AmazonOrder, walletID: WalletID): CashOut 
   if (order.itemTitles.length > 0) metadata.items = order.itemTitles.join(" | ");
   if (order.status !== "") metadata.status = order.status;
   return {
-    id: `amazon:${order.id}`,
+    id: scopedID(wallet.connectionID, "transaction", order.id),
+    connectionID: wallet.connectionID,
     amount: order.amount,
     occurredAt: order.occurredAt,
-    from: walletID,
+    from: wallet,
     to: { name: "Amazon.co.jp", metadata },
   };
 }

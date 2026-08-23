@@ -8,18 +8,18 @@ import type {
   SessionRestoreResult,
   SessionValidation,
 } from "../../port/authentication.ts";
-import { AMAZON_PROVIDER_ID, type AmazonContext } from "./context.ts";
+import { MONEYFORWARD_PROVIDER_ID, type MoneyForwardContext } from "./context.ts";
 import { type Credentials, performLogin, validateCurrentSession } from "./login.ts";
 
 const SNAPSHOT_SCHEMA_VERSION = 1;
 
-export class AmazonAuthentication
-  implements AuthenticationPort<typeof AMAZON_PROVIDER_ID, Credentials> {
-  readonly provider = AMAZON_PROVIDER_ID;
+export class MoneyForwardAuthentication
+  implements AuthenticationPort<typeof MONEYFORWARD_PROVIDER_ID, Credentials> {
+  readonly provider = MONEYFORWARD_PROVIDER_ID;
   readonly connection;
-  readonly #context: AmazonContext;
+  readonly #context: MoneyForwardContext;
 
-  constructor(context: AmazonContext) {
+  constructor(context: MoneyForwardContext) {
     this.#context = context;
     this.connection = context.connection;
   }
@@ -40,7 +40,11 @@ export class AmazonAuthentication
     }
     try {
       const cookies = parseCookieSnapshot(snapshot.payload.cookies);
-      if (cookies.some((cookie) => !cookieDomainMatches(this.#context.baseURL, cookie.domain))) {
+      const allowedDomains = new Set([
+        this.#context.baseURL.hostname.toLowerCase(),
+        this.#context.idBaseURL.hostname.toLowerCase(),
+      ]);
+      if (cookies.some((cookie) => !allowedDomains.has(cookie.domain))) {
         return rejected("malformed");
       }
       this.#context.session.cookies.restore(cookies);
@@ -64,9 +68,9 @@ export class AmazonAuthentication
     this.#context.authenticationState = "valid";
   }
 
-  captureSession(): ProviderSessionSnapshot<typeof AMAZON_PROVIDER_ID> {
+  captureSession(): ProviderSessionSnapshot<typeof MONEYFORWARD_PROVIDER_ID> {
     if (this.#context.authenticationState !== "valid") {
-      throw new TypeError("amazon: an unvalidated session cannot be captured");
+      throw new TypeError("moneyforward: an unvalidated session cannot be captured");
     }
     return {
       schemaVersion: SNAPSHOT_SCHEMA_VERSION,
@@ -104,11 +108,6 @@ function rejected(
 
 function isValidCapturedAt(value: unknown): value is string {
   return typeof value === "string" && value !== "" && !Number.isNaN(Date.parse(value));
-}
-
-function cookieDomainMatches(baseURL: URL, domain: string): boolean {
-  const host = baseURL.hostname.toLowerCase();
-  return host === domain || host.endsWith(`.${domain}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -1,5 +1,6 @@
 import type { AuthInteraction } from "./auth_interaction.ts";
 import type { ProviderID } from "./provider.ts";
+import type { ConnectionID, ProviderConnection } from "../model/connection.ts";
 
 export type JsonPrimitive =
   | null
@@ -27,6 +28,9 @@ export interface ProviderSessionSnapshot<Provider extends ProviderID = ProviderI
    */
   readonly provider: Provider;
 
+  /** 保存先profileを含む接続境界。 */
+  readonly connectionID: ConnectionID;
+
   /**
    * ISO 8601形式。
    */
@@ -52,6 +56,7 @@ export type SessionValidation =
 export type SessionRestoreRejectionReason =
   | "malformed"
   | "provider-mismatch"
+  | "connection-mismatch"
   | "unsupported-schema";
 
 export type SessionRestoreResult =
@@ -81,6 +86,7 @@ export interface AuthenticationPort<
   Credentials,
 > {
   readonly provider: Provider;
+  readonly connection: ProviderConnection<Provider>;
 
   /**
    * 保存済みsnapshotをProviderContextへ復元する。

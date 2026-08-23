@@ -1,20 +1,8 @@
 import type { ProviderSessionSnapshot } from "./authentication.ts";
 import type { ProviderID } from "./provider.ts";
+import type { ProviderConnection } from "../model/connection.ts";
 
-export interface SessionKey<Provider extends ProviderID = ProviderID> {
-  readonly provider: Provider;
-
-  /**
-   * ログインアカウントを選択するための名称。
-   * wallet IDとは独立させる。
-   *
-   * 例:
-   * - default
-   * - personal
-   * - business
-   */
-  readonly profile: string;
-}
+export type SessionKey<Provider extends ProviderID = ProviderID> = ProviderConnection<Provider>;
 
 export interface SessionVaultOptions {
   readonly signal?: AbortSignal;

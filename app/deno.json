@@ -26,13 +26,14 @@
     ]
   },
   "tasks": {
-    "start": "deno run --unstable-worker-options --allow-env=JCB_USER_ID,JCB_PASSWORD,AMAZON_EMAIL,AMAZON_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe main.ts",
+    "start": "deno run --unstable-worker-options --allow-env=JCB_USER_ID,JCB_PASSWORD,AMAZON_EMAIL,AMAZON_PASSWORD,MONEYFORWARD_EMAIL,MONEYFORWARD_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe main.ts",
     "jcb": "deno run --unstable-worker-options --allow-env=JCB_USER_ID,JCB_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe main.ts jcb fetch",
     "amazon": "deno run --unstable-worker-options --allow-env=AMAZON_EMAIL,AMAZON_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe main.ts amazon fetch",
+    "moneyforward": "deno run --unstable-worker-options --allow-env=MONEYFORWARD_EMAIL,MONEYFORWARD_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe main.ts moneyforward fetch",
     "check": "deno check main.ts internal/**/*.ts",
     "test": "deno test --unstable-worker-options --allow-env=JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net=127.0.0.1 --allow-read --allow-write --allow-run=powershell.exe",
     "lint": "deno lint",
     "fmt:check": "deno fmt --check",
-    "compile": "deno compile --unstable-worker-options --allow-env=JCB_USER_ID,JCB_PASSWORD,AMAZON_EMAIL,AMAZON_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe --output okura.exe main.ts"
+    "compile": "deno compile --unstable-worker-options --allow-env=JCB_USER_ID,JCB_PASSWORD,AMAZON_EMAIL,AMAZON_PASSWORD,MONEYFORWARD_EMAIL,MONEYFORWARD_PASSWORD,LOCALAPPDATA,JEST_WORKER_ID,UNDICI_NO_WASM_SIMD --allow-net --allow-read --allow-write --allow-run=powershell.exe --output okura.exe main.ts"
   }
 }

@@ -264,7 +264,7 @@ function normalizedPath(url: URL): string {
 }
 
 function isAuthenticationResponse(response: Response): boolean {
-  if (response.status === 401 || response.status === 403) return true;
+  if (response.status === 401) return true;
   if (response.url === "") return false;
   const path = normalizedPath(new URL(response.url));
   return path === normalizedPath(new URL(LOGIN_PATH, "https://invalid.local")) ||

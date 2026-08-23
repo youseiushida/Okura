@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert/";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert/";
 import { JCBAuthentication } from "./authentication.ts";
 import { createJCBContext } from "./context.ts";
 import { MYPAGE_PATH } from "./login.ts";
@@ -28,12 +28,24 @@ Deno.test("JCBAuthentication snapshot round-trips cookies and user agent", async
   );
 });
 
+Deno.test("JCBAuthentication does not classify an ambiguous 403 as expired", async () => {
+  const context = createJCBContext({
+    fetch: () =>
+      Promise.resolve(responseAt(`https://my.jcb.co.jp${MYPAGE_PATH}`, "forbidden", 403)),
+  });
+  context.authenticationState = "restored";
+  context.userAgent = "test-agent";
+  await assertRejects(() => new JCBAuthentication(context).validateSession());
+  assertEquals(context.authenticationState, "restored");
+});
+
 Deno.test("JCBAuthentication rejects malformed user-agent state", () => {
   const auth = new JCBAuthentication(createJCBContext());
   assertEquals(
     auth.restoreSession({
       schemaVersion: 1,
       provider: "jcb",
+      connectionID: auth.connection.id,
       capturedAt: new Date().toISOString(),
       payload: { cookies: [], userAgent: "bad\nagent" },
     }),
@@ -42,8 +54,8 @@ Deno.test("JCBAuthentication rejects malformed user-agent state", () => {
   assertThrows(() => auth.captureSession(), TypeError);
 });
 
-function responseAt(url: string, body: string): Response {
-  const response = new Response(body, { status: 200 });
+function responseAt(url: string, body: string, status = 200): Response {
+  const response = new Response(body, { status });
   Object.defineProperty(response, "url", { value: url });
   return response;
 }

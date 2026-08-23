@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { createProviderConnection } from "../../model/connection.ts";
 import type { ProviderSessionSnapshot } from "../../port/authentication.ts";
 import { isProviderID, type ProviderID } from "../../port/provider.ts";
 import type {
@@ -56,7 +57,10 @@ export class FileSessionVault implements SessionVaultPort {
       throw new Error("decrypted session vault entry is too large");
     }
     try {
-      return JSON.parse(new TextDecoder().decode(plaintext));
+      return bindLegacySnapshotToConnection(
+        JSON.parse(new TextDecoder().decode(plaintext)),
+        key,
+      );
     } catch (error) {
       throw new Error("decrypted session vault entry is not valid JSON", { cause: error });
     }
@@ -70,6 +74,9 @@ export class FileSessionVault implements SessionVaultPort {
     validateKey(key);
     if (snapshot.provider !== key.provider) {
       throw new TypeError("session key and snapshot provider do not match");
+    }
+    if (snapshot.connectionID !== key.id) {
+      throw new TypeError("session key and snapshot connection do not match");
     }
     options.signal?.throwIfAborted();
     const plaintext = new TextEncoder().encode(JSON.stringify(snapshot));
@@ -120,6 +127,23 @@ export class FileSessionVault implements SessionVaultPort {
     const suffix = toHex(new Uint8Array(digest)).slice(0, 32);
     return join(this.#root, `${key.provider}-${suffix}.session`);
   }
+}
+
+/**
+ * ConnectionID導入前のDPAPI snapshotを、読み出した保存キーへ束縛する。
+ * 認証成功後の通常の再保存で新形式へ置き換わる。
+ */
+export function bindLegacySnapshotToConnection(
+  value: unknown,
+  key: SessionKey,
+): unknown {
+  if (
+    typeof value !== "object" || value === null || Array.isArray(value) ||
+    !("provider" in value) || value.provider !== key.provider ||
+    !("schemaVersion" in value) || value.schemaVersion !== 1 ||
+    ("connectionID" in value && value.connectionID !== undefined)
+  ) return value;
+  return { ...value, connectionID: key.id };
 }
 
 /** Windows CurrentUser DPAPI。平文・暗号文はstdin/stdoutだけで渡す。 */
@@ -205,6 +229,9 @@ function validateKey(key: SessionKey): void {
     hasControlCharacter(key.profile)
   ) {
     throw new TypeError("invalid session profile");
+  }
+  if (key.id !== createProviderConnection(key.provider, key.profile).id) {
+    throw new TypeError("invalid session connection ID");
   }
 }
 

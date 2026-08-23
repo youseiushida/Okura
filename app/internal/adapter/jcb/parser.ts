@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { parse } from "parse5";
 import type { CashOut } from "../../model/transaction.ts";
-import type { WalletID } from "../../model/account.ts";
+import type { Wallet } from "../../model/account.ts";
+import { scopedID } from "../../model/connection.ts";
 import type { Period } from "../../port/source.ts";
 import { PeriodUnavailableError, UnexpectedPageError } from "./errors.ts";
 
@@ -39,16 +40,17 @@ export interface StatementRow {
   approvalNumber: string;
 }
 
-export function statementRowToCashOut(row: StatementRow, walletID: WalletID): CashOut {
+export function statementRowToCashOut(row: StatementRow, wallet: Wallet): CashOut {
   const metadata: Record<string, string> = { source: "jcb" };
   addMetadata(metadata, "user", row.user);
   addMetadata(metadata, "description", row.description);
   addMetadata(metadata, "approval_number", row.approvalNumber);
   return {
-    id: row.id,
+    id: scopedID(wallet.connectionID, "transaction", row.id),
+    connectionID: wallet.connectionID,
     amount: row.amount,
     occurredAt: row.occurredAt,
-    from: walletID,
+    from: wallet,
     to: { name: row.merchant, metadata },
   };
 }
@@ -204,7 +206,7 @@ function normalizeDigits(value: string): string {
 }
 
 function transactionID(fingerprint: string, ordinal: number): string {
-  return `jcb:${createHash("sha256").update(`${fingerprint}\0${ordinal}`).digest("hex")}`;
+  return createHash("sha256").update(`${fingerprint}\0${ordinal}`).digest("hex");
 }
 
 function findTargetTable(node: HtmlNode): HtmlNode | undefined {

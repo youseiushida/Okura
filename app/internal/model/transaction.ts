@@ -1,4 +1,5 @@
-import type { WalletID } from "./account.ts";
+import type { Wallet } from "./account.ts";
+import type { ConnectionID } from "./connection.ts";
 
 export interface ExternalParty {
   name: string;
@@ -6,25 +7,28 @@ export interface ExternalParty {
 }
 
 export interface CashIn {
-  id: string;
-  amount: number;
-  occurredAt: Date;
-  from: ExternalParty;
-  to: WalletID;
+  readonly id: string;
+  readonly connectionID: ConnectionID;
+  readonly amount: number;
+  readonly occurredAt: Date;
+  readonly from: ExternalParty;
+  readonly to: Wallet;
 }
 
 export interface CashOut {
-  id: string;
-  amount: number;
-  occurredAt: Date;
-  from: WalletID;
-  to: ExternalParty;
+  readonly id: string;
+  readonly connectionID: ConnectionID;
+  readonly amount: number;
+  readonly occurredAt: Date;
+  readonly from: Wallet;
+  readonly to: ExternalParty;
 }
 
 export interface Transfer {
-  id: string;
-  amount: number;
-  occurredAt: Date;
-  from: WalletID;
-  to: WalletID;
+  readonly id: string;
+  readonly connectionID: ConnectionID;
+  readonly amount: number;
+  readonly occurredAt: Date;
+  readonly from: Wallet;
+  readonly to: Wallet;
 }

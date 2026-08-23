@@ -1,7 +1,14 @@
 import type { AuthenticationPort } from "../port/authentication.ts";
-import type { CashInSource, CashOutSource, TransferSource } from "../port/source.ts";
+import type { ProviderConnection } from "../model/connection.ts";
+import type {
+  AssetBalanceSource,
+  CashInSource,
+  CashOutSource,
+  TransferSource,
+} from "../port/source.ts";
 
 export interface ProviderSources {
+  readonly assetBalances?: AssetBalanceSource;
   readonly cashIns?: CashInSource;
   readonly cashOuts?: CashOutSource;
   readonly transfers?: TransferSource;
@@ -18,6 +25,7 @@ export interface ProviderModule<
   Credentials,
   Sources extends ProviderSources,
 > {
+  readonly connection: ProviderConnection<Provider>;
   readonly auth: AuthenticationPort<Provider, Credentials>;
   readonly sources: Sources;
 }
