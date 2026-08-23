@@ -2,6 +2,7 @@ import { parse } from "parse5";
 import type { Wallet } from "../../model/account.ts";
 import { scopedID } from "../../model/connection.ts";
 import type { CashOut } from "../../model/transaction.ts";
+import { UnexpectedPageError } from "./errors.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const ORDER_ID_PATTERN = /\b(?:D\d{2}|\d{3})-\d{7}-\d{7}\b/i;
@@ -46,14 +47,17 @@ export interface ParsedOrderPage {
   orders: AmazonOrder[];
   references: AmazonOrderReference[];
   cardCount: number;
+  nextStartIndex?: number;
 }
 
 export function parseOrderPage(payload: string): ParsedOrderPage {
   const orders = new Map<string, AmazonOrder>();
   const references = new Map<string, AmazonOrderReference>();
+  const paginationCursors = new Set<number>();
   let cardCount = 0;
   for (const html of htmlDocuments(payload)) {
     const document = parse(html) as unknown as HtmlNode;
+    collectHTMLPaginationCursors(document, paginationCursors);
     const cards = descendants(document).filter(isOrderCard);
     cardCount = Math.max(cardCount, cards.length);
     for (const card of cards) {
@@ -65,11 +69,98 @@ export function parseOrderPage(payload: string): ParsedOrderPage {
       if (order !== undefined && !orders.has(order.id)) orders.set(order.id, order);
     }
   }
-  return {
+  collectStreamPaginationCursors(payload, paginationCursors);
+  const result: ParsedOrderPage = {
     orders: [...orders.values()],
     references: [...references.values()],
     cardCount: Math.max(cardCount, orders.size, references.size),
   };
+  const nextStartIndex = singlePaginationCursor(paginationCursors);
+  if (nextStartIndex !== undefined) result.nextStartIndex = nextStartIndex;
+  return result;
+}
+
+function collectHTMLPaginationCursors(root: HtmlNode, cursors: Set<number>): void {
+  for (const node of descendants(root)) {
+    if (node.tagName !== "script" || attribute(node, "type") !== "a-state") continue;
+    const descriptor = parseJSONRecord(attribute(node, "data-a-state"));
+    if (descriptor?.key !== "chunkState") continue;
+    const state = parseJSONRecord(textContent(node));
+    if (state === undefined) {
+      throw new UnexpectedPageError("Amazon pagination state was malformed");
+    }
+    collectChunkStateCursor(state, cursors);
+  }
+}
+
+function collectStreamPaginationCursors(payload: string, cursors: Set<number>): void {
+  const pending = [...parseStructuredJSONValues(payload)];
+  while (pending.length > 0) {
+    const value = pending.pop();
+    if (Array.isArray(value)) {
+      if (value[0] === "state" && value[1] === "chunkState") {
+        collectChunkStateCursor(value[2], cursors);
+      }
+      pending.push(...value);
+      continue;
+    }
+    if (value !== null && typeof value === "object") {
+      pending.push(...Object.values(value));
+    }
+  }
+}
+
+function collectChunkStateCursor(state: unknown, cursors: Set<number>): void {
+  if (state === null || typeof state !== "object" || Array.isArray(state)) {
+    throw new UnexpectedPageError("Amazon pagination state was malformed");
+  }
+  if (!Object.hasOwn(state, "nextStartIndex")) return;
+  const cursor = (state as Record<string, unknown>).nextStartIndex;
+  if (!Number.isSafeInteger(cursor) || (cursor as number) < 0) {
+    throw new UnexpectedPageError("Amazon pagination cursor was invalid");
+  }
+  cursors.add(cursor as number);
+}
+
+function singlePaginationCursor(cursors: Set<number>): number | undefined {
+  if (cursors.size === 0) return undefined;
+  if (cursors.size !== 1) {
+    throw new UnexpectedPageError("Amazon pagination cursors were inconsistent");
+  }
+  return cursors.values().next().value;
+}
+
+function parseJSONRecord(value: string): Record<string, unknown> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function parseStructuredJSONValues(payload: string): unknown[] {
+  try {
+    return [JSON.parse(payload)];
+  } catch {
+    const values: unknown[] = [];
+    const seen = new Set<string>();
+    const addCandidate = (rawCandidate: string): void => {
+      const candidate = rawCandidate.trim().replace(/^&&&(?:START|END)&&&$/, "");
+      if (candidate === "" || seen.has(candidate)) return;
+      seen.add(candidate);
+      try {
+        values.push(JSON.parse(candidate));
+      } catch {
+        // Non-JSON protocol fragments and HTML are not pagination state.
+      }
+    };
+    for (const chunk of payload.split("&&&")) addCandidate(chunk);
+    for (const line of payload.split(/\r?\n/)) addCandidate(line);
+    return values;
+  }
 }
 
 export function parseOrderDetail(payload: string): ParsedOrderDetail {

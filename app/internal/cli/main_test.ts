@@ -145,7 +145,10 @@ Deno.test("runCLI obtains Amazon credentials and OTP through the central interac
   assertEquals(JSON.stringify(credentialVault.saved).includes(verificationCode), false);
   assertEquals(writes.join("\n").includes("user@example.com"), false);
   assertEquals(writes.join("\n").includes("amazon-password"), false);
-  assertStringIncludes(writes.join("\n"), "2026-08-20\t1280円\tAmazon.co.jp");
+  assertStringIncludes(
+    writes.join("\n"),
+    "2026-08-20\t1280円\t（商品名を取得できませんでした）",
+  );
 });
 
 Deno.test("runCLI reuses a valid saved session without asking for credentials", async () => {

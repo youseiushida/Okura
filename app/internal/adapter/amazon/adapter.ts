@@ -17,7 +17,6 @@ import { AMAZON_USER_AGENT } from "./runtime.ts";
 
 export const ORDERS_PATH = "/your-orders/orders";
 export const MAX_RESPONSE_BYTES = 4 << 20;
-const PAGE_SIZE = 10;
 const MAX_PAGES_PER_YEAR = 200;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
@@ -70,11 +69,11 @@ export class AmazonAdapter implements CashOutSource {
     result: Map<string, CashOut>,
     signal?: AbortSignal,
   ): Promise<void> {
+    let startIndex: number | undefined;
     for (let page = 0; page < MAX_PAGES_PER_YEAR; page += 1) {
       signal?.throwIfAborted();
-      const startIndex = page * PAGE_SIZE;
       const url = new URL(ORDERS_PATH, this.#context.baseURL);
-      if (page === 0) {
+      if (startIndex === undefined) {
         url.searchParams.set("orderFilter", "all");
       } else {
         url.searchParams.set("startIndex", String(startIndex));
@@ -83,7 +82,7 @@ export class AmazonAdapter implements CashOutSource {
       }
       url.searchParams.set("timeFilter", `year-${year}`);
       const response = await this.#context.session.request(url, {
-        headers: orderHeaders(this.#context.baseURL.href, page === 0),
+        headers: orderHeaders(this.#context.baseURL.href, startIndex === undefined),
         signal,
       });
       if (isAuthenticationResponse(response)) this.#authenticationRequired();
@@ -93,7 +92,7 @@ export class AmazonAdapter implements CashOutSource {
       const payload = await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
       const parsed = parseOrderPage(payload);
       if (parsed.cardCount === 0) {
-        if (isEmptyOrderPage(payload) || page > 0) return;
+        if (isEmptyOrderPage(payload) && parsed.nextStartIndex === undefined) return;
         throw new UnexpectedPageError("Amazon order page did not contain recognizable orders");
       }
       if (parsed.cardCount > 0 && parsed.orders.length === 0 && parsed.references.length === 0) {
@@ -121,14 +120,14 @@ export class AmazonAdapter implements CashOutSource {
         ) continue;
         const detail = await this.#fetchOrderDetail(
           reference,
-          page * PAGE_SIZE + index + 1,
+          (startIndex ?? 0) + index + 1,
           url.href,
           signal,
         );
         const occurredAt = reference.occurredAt ?? detail.occurredAt;
         if (occurredAt === undefined) {
           throw new UnexpectedPageError(
-            `Amazon order detail ${page * PAGE_SIZE + index + 1} did not contain an order date`,
+            `Amazon order detail ${(startIndex ?? 0) + index + 1} did not contain an order date`,
           );
         }
         if (
@@ -142,7 +141,11 @@ export class AmazonAdapter implements CashOutSource {
         result.set(cashOut.id, cashOut);
         await delay(this.pageDelayMs, signal);
       }
-      if (parsed.cardCount < PAGE_SIZE) return;
+      if (parsed.nextStartIndex === undefined) return;
+      if (parsed.nextStartIndex <= (startIndex ?? 0)) {
+        throw new UnexpectedPageError("Amazon pagination cursor did not advance");
+      }
+      startIndex = parsed.nextStartIndex;
       await delay(this.pageDelayMs, signal);
     }
     throw new UnexpectedPageError(`Amazon pagination exceeded ${MAX_PAGES_PER_YEAR} pages`);

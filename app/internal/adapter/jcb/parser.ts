@@ -40,6 +40,48 @@ export interface StatementRow {
   approvalNumber: string;
 }
 
+export type MypageStatus = "authenticated" | "expired" | "unexpected";
+
+export function parseMypageStatus(html: string): MypageStatus {
+  const document = parse(html) as unknown as HtmlNode;
+  let hasLogoutLink = false;
+  let hasDebitDetailMenuLink = false;
+  let hasErrorWrapper = false;
+  let hasCommunicationErrorHeading = false;
+  let hasErrorHelpLink = false;
+
+  visit(document, (node) => {
+    const classes = new Set(attribute(node, "class").split(/\s+/).filter(Boolean));
+    if (classes.has("wrapper") && classes.has("error")) hasErrorWrapper = true;
+    if (
+      node.tagName === "a" && attribute(node, "name") === "toHeaderUserLogout"
+    ) {
+      hasLogoutLink = true;
+    }
+    if (
+      node.tagName === "a" && attribute(node, "name") === "toNaviDebitDetailMenu"
+    ) {
+      hasDebitDetailMenuLink = true;
+    }
+    if (
+      /^h[1-3]$/.test(node.tagName ?? "") &&
+      normalizeText(textContent(node)) === "通信エラーが発生しました"
+    ) {
+      hasCommunicationErrorHeading = true;
+    }
+    if (
+      node.tagName === "a" &&
+      attribute(node, "href").split(/[?#]/, 1)[0] === "/support/pop/myjcberror.html"
+    ) {
+      hasErrorHelpLink = true;
+    }
+  });
+
+  if (hasLogoutLink && hasDebitDetailMenuLink) return "authenticated";
+  if (hasErrorWrapper && hasCommunicationErrorHeading && hasErrorHelpLink) return "expired";
+  return "unexpected";
+}
+
 export function statementRowToCashOut(row: StatementRow, wallet: Wallet): CashOut {
   const metadata: Record<string, string> = { source: "jcb" };
   addMetadata(metadata, "user", row.user);
@@ -219,6 +261,11 @@ function findTargetTable(node: HtmlNode): HtmlNode | undefined {
     if (result !== undefined) return result;
   }
   return undefined;
+}
+
+function visit(node: HtmlNode, callback: (node: HtmlNode) => void): void {
+  callback(node);
+  for (const child of node.childNodes ?? []) visit(child, callback);
 }
 
 function directChild(node: HtmlNode, tagName: string): HtmlNode | undefined {

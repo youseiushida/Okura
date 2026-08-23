@@ -37,6 +37,23 @@ export function statementHTML(...rows: string[][]): string {
     `</tbody></table></body></html>`;
 }
 
+export function authenticatedMypageHTML(): string {
+  return `<!doctype html><html><body>
+    <header><a name="toHeaderUserLogout" href="/iss-pc/member/user_manage/userLogout.html">
+      ログアウト
+    </a></header>
+    <nav><a name="toNaviDebitDetailMenu"
+      href="/iss-pc/member/debit/details/debitDetailMenu.html">ご利用明細</a></nav>
+  </body></html>`;
+}
+
+export function expiredMypageHTML(): string {
+  return `<!doctype html><html><body><div class="wrapper error">
+    <h2>通信エラーが発生しました</h2>
+    <a href="/support/pop/myjcberror.html">通信エラー原因について</a>
+  </div></body></html>`;
+}
+
 export function hasCause(
   error: unknown,
   predicate: (error: Error) => boolean,

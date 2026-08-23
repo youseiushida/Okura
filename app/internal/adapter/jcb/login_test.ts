@@ -13,7 +13,7 @@ import {
   validateProtectedBody,
 } from "./login.ts";
 import { HttpSession } from "./session.ts";
-import { startTestServer } from "./test_util.ts";
+import { authenticatedMypageHTML, expiredMypageHTML, startTestServer } from "./test_util.ts";
 
 const interaction: AuthInteraction = {
   otp: { request: () => Promise.reject(new Error("OTP was not expected")) },
@@ -42,7 +42,7 @@ Deno.test("JCBAuthentication.login submits a protected form with its HTTP sessio
     }
     if (path === MYPAGE_PATH) {
       assert(request.headers.get("Cookie")?.includes("MYJCB_SESSION=authenticated"));
-      return new Response("mypage");
+      return new Response(authenticatedMypageHTML());
     }
     return new Response("not found", { status: 404 });
   });
@@ -62,6 +62,31 @@ Deno.test("JCBAuthentication.login submits a protected form with its HTTP sessio
     await auth.login({ userID: "my-id", password: "my-password" }, { interaction });
     assertEquals(context.userAgent, userAgent);
     assertEquals(context.authenticationState, "valid");
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("JCBAuthentication.login rejects a timeout page at the MyJCB URL", async () => {
+  const server = startTestServer((request) => {
+    if (new URL(request.url).pathname === MYPAGE_PATH) {
+      return new Response(expiredMypageHTML());
+    }
+    return Response.redirect(new URL(MYPAGE_PATH, request.url), 302);
+  });
+  try {
+    const context = createJCBContext({ baseURL: server.url });
+    const credentials = { userID: "id", password: "password" };
+    const auth = new JCBAuthentication(context, {
+      generateProtection: () =>
+        Promise.resolve({
+          action: `${server.url}${LOGIN_SUBMIT_PATH}`,
+          body: protectedBody(credentials),
+          userAgent: "test-agent",
+        }),
+    });
+    await assertRejects(() => auth.login(credentials, { interaction }));
+    assertEquals(context.authenticationState, "empty");
   } finally {
     await server.close();
   }

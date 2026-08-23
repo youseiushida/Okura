@@ -48,6 +48,16 @@ Deno.test("parseOrderPage extracts HTML from AmazonUI streaming JSON", () => {
   assertEquals(parsed.orders.map((order) => order.id), ["123-4567890-1234567"]);
 });
 
+Deno.test("parseOrderPage reads the explicit cursor from an HTML chunk state", () => {
+  const payload = `
+    <script type="a-state" data-a-state="{&quot;key&quot;:&quot;chunkState&quot;}">
+      {"nextStartIndex":20,"orderFilter":"UNIFIED","timeFilter":"year-2026"}
+    </script>
+    ${orderCard}`;
+  const parsed = parseOrderPage(payload);
+  assertEquals(parsed.nextStartIndex, 20);
+});
+
 Deno.test("parseOrderPage parses mobile purchase tiles from an AUI stream", () => {
   const tile = `
     <li><div class="a-box past-purchase-tile"><div class="a-box-inner">
@@ -67,6 +77,7 @@ Deno.test("parseOrderPage parses mobile purchase tiles from an AUI stream", () =
   ].join("&&&\n");
   const parsed = parseOrderPage(payload);
   assertEquals(parsed.cardCount, 1);
+  assertEquals(parsed.nextStartIndex, 10);
   assertEquals(parsed.orders, []);
   assertEquals(parsed.references, [{
     id: "503-1234567-7654321",

@@ -1,9 +1,9 @@
 import type { Wallet } from "../../model/account.ts";
-import { readBytesLimited } from "../../http/body.ts";
 import { rethrowAbort } from "../../error/abort.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { JCBError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
+import { readJCBHTML } from "./html.ts";
 import { MYPAGE_PATH } from "./login.ts";
 import { parseStatement, statementRowToCashOut, statementSequences } from "./parser.ts";
 import { DEFAULT_BASE_URL, type JCBContext, resolveJCBPath } from "./context.ts";
@@ -11,7 +11,6 @@ import { DEFAULT_BASE_URL, type JCBContext, resolveJCBPath } from "./context.ts"
 export const DETAIL_PATH = "/iss-pc/member/debit/details/debitDetail.html";
 export const DETAIL_MENU_PATH = "/iss-pc/member/debit/details/debitDetailMenu.html";
 export const DETAIL_MENU_LINK_ID = "myj_main_debitDetailMenu";
-export const MAX_RESPONSE_BYTES = 4 << 20;
 
 export interface Config {
   readonly wallet: Wallet;
@@ -84,7 +83,7 @@ export class JCBAdapter implements CashOutSource {
     const response = await this.#context.session.request(detailURL, { headers, signal });
     if (isLoginResponse(response)) this.#authenticationRequired();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
-    const html = await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
+    const html = await readJCBHTML(response);
     const parsed = parseStatement(html);
     if (!parsed.found) throw new UnexpectedPageError();
     return parsed.rows;
@@ -101,7 +100,7 @@ export class JCBAdapter implements CashOutSource {
     const response = await this.#context.session.request(menuURL, { headers, signal });
     if (isLoginResponse(response)) this.#authenticationRequired();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
-    await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
+    await readJCBHTML(response);
   }
 
   #statementMenuURL(): URL {
@@ -131,21 +130,6 @@ export function isLoginResponse(response: Response): boolean {
     }
   }
   return false;
-}
-
-async function decodeLimitedResponse(response: Response, limit: number): Promise<string> {
-  const bytes = await readBytesLimited(
-    response,
-    limit,
-    (value) => new JCBError(`response exceeds ${value} bytes`),
-  );
-  const contentType = response.headers.get("Content-Type") ?? "";
-  const charset = contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1] ?? "utf-8";
-  try {
-    return new TextDecoder(charset).decode(bytes);
-  } catch (error) {
-    throw new JCBError(`decode response as ${charset}`, { cause: error });
-  }
 }
 
 function errorMessage(error: unknown): string {

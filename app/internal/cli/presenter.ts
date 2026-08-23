@@ -37,15 +37,25 @@ export function presentCashOuts(
     );
   }
 
+  const isAmazon = result.connection.provider === "amazon";
   return [
     `期間: ${options.periodLabels.from} 〜 ${options.periodLabels.to}`,
     `件数: ${result.cashOuts.length}件  合計: ${formatJPY(totalAmount)}`,
     "",
-    "日付\t金額\t利用先",
+    isAmazon ? "日付\t金額\t商品名" : "日付\t金額\t利用先",
     ...result.cashOuts.map((cashOut) =>
-      `${formatJSTDate(cashOut.occurredAt)}\t${cashOut.amount}円\t${cashOut.to.name}`
+      `${formatJSTDate(cashOut.occurredAt)}\t${cashOut.amount}円\t${
+        isAmazon ? amazonItemTitles(cashOut.to.metadata) : cashOut.to.name
+      }`
     ),
   ].join("\n");
+}
+
+function amazonItemTitles(metadata: Readonly<Record<string, string>>): string {
+  const itemTitles = metadata.items?.trim();
+  return itemTitles === undefined || itemTitles === ""
+    ? "（商品名を取得できませんでした）"
+    : itemTitles;
 }
 
 export function presentFinancialSnapshot(

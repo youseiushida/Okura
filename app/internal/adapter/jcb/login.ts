@@ -4,8 +4,9 @@ import {
 } from "../../http/body.ts";
 import type { AuthenticationOptions } from "../../port/authentication.ts";
 import type { UserIDPasswordCredentials } from "../../port/credentials.ts";
-import { MAX_RESPONSE_BYTES } from "./adapter.ts";
 import { AuthenticationFailedError, JCBError } from "./errors.ts";
+import { MAX_RESPONSE_BYTES, readJCBHTML } from "./html.ts";
+import { parseMypageStatus } from "./parser.ts";
 import { executeProtectionIsolated } from "./protection_worker_client.ts";
 import type { HttpSession } from "./session.ts";
 import { type JCBContext, resolveJCBPath } from "./context.ts";
@@ -106,8 +107,8 @@ export async function performLogin(
       },
       body: form.body,
     });
-    await discardLimited(response, MAX_RESPONSE_BYTES);
     if (!isMypageResponse(response)) {
+      await discardLimited(response, MAX_RESPONSE_BYTES);
       const landingPath = response.url === "" ? "" : new URL(response.url).pathname;
       if (isAuthenticationResponse(response)) {
         throw new AuthenticationFailedError(response.status, landingPath);
@@ -115,6 +116,10 @@ export async function performLogin(
       throw new JCBError(
         `login returned unexpected HTTP ${response.status} at ${JSON.stringify(landingPath)}`,
       );
+    }
+    const mypageHTML = await readJCBHTML(response);
+    if (parseMypageStatus(mypageHTML) !== "authenticated") {
+      throw new JCBError("login returned an unexpected MyJCB page");
     }
     context.userAgent = form.userAgent || userAgent;
   } finally {
@@ -138,11 +143,14 @@ export async function validateCurrentSession(
     await discardLimited(response, MAX_RESPONSE_BYTES);
     return false;
   }
-  await discardLimited(response, MAX_RESPONSE_BYTES);
   if (!isMypageResponse(response)) {
+    await discardLimited(response, MAX_RESPONSE_BYTES);
     throw new JCBError(`validate MyJCB session: unexpected HTTP ${response.status}`);
   }
-  return true;
+  const status = parseMypageStatus(await readJCBHTML(response));
+  if (status === "authenticated") return true;
+  if (status === "expired") return false;
+  throw new JCBError("validate MyJCB session: unexpected MyJCB page");
 }
 
 export async function generateProtection(context: ProtectionContext): Promise<ProtectedForm> {
