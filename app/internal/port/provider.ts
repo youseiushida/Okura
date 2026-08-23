@@ -1,12 +1,11 @@
-export const PROVIDER_IDS = [
-  "amazon",
-  "jcb",
-  "moneyforward",
-] as const;
-
-export type ProviderID = typeof PROVIDER_IDS[number];
+/**
+ * Providerの公開識別子。
+ *
+ * 対応Providerの一覧はcomposition rootが管理する。Port層では
+ * 新しいAdapterを追加するたびに閉じたunionを変更しない。
+ */
+export type ProviderID = string;
 
 export function isProviderID(value: unknown): value is ProviderID {
-  return typeof value === "string" &&
-    (PROVIDER_IDS as readonly string[]).includes(value);
+  return typeof value === "string" && /^[a-z][a-z0-9-]*$/.test(value);
 }

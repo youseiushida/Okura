@@ -1,12 +1,12 @@
 export {
-  DEFAULT_BASE_URL,
   DETAIL_MENU_LINK_ID,
   DETAIL_MENU_PATH,
   DETAIL_PATH,
   JCBAdapter,
   MAX_RESPONSE_BYTES,
 } from "./adapter.ts";
-export type { Config } from "./adapter.ts";
+export { JCBAuthentication } from "./authentication.ts";
+export { DEFAULT_BASE_URL, JCB_PROVIDER_ID } from "./context.ts";
 export {
   AuthenticationFailedError,
   JCBError,
@@ -15,7 +15,6 @@ export {
   UnexpectedPageError,
 } from "./errors.ts";
 export {
-  createAuthenticated,
   DEFAULT_LOGIN_TIMEOUT_MS,
   DEFAULT_USER_AGENT,
   LOGIN_PATH,
@@ -23,3 +22,5 @@ export {
   MYPAGE_PATH,
 } from "./login.ts";
 export type { Credentials, LoginOptions } from "./login.ts";
+export { createJCBModule } from "./module.ts";
+export type { Config, JCBModule } from "./module.ts";

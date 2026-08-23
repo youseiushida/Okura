@@ -1,5 +1,18 @@
-import { assertEquals, assertRejects } from "@std/assert/";
-import { type Fetcher, HttpSession } from "./session.ts";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert/";
+import { CookieStore, type Fetcher, HttpSession } from "./session.ts";
+
+Deno.test("CookieStore snapshot restore is atomic and rejects malformed cookies", () => {
+  const store = new CookieStore();
+  const url = new URL("https://login.example/private");
+  store.set("session=valid; Path=/; Secure; HttpOnly", url, true);
+  const snapshot = store.capture();
+  store.clear();
+  store.restore(snapshot);
+  assertEquals(store.header(url), "session=valid");
+
+  assertThrows(() => store.restore([{ ...snapshot[0], value: "bad;value" }]), TypeError);
+  assertEquals(store.header(url), "session=valid");
+});
 
 Deno.test("HttpSession rejects a cross-origin 307 before forwarding secrets", async () => {
   const requests: Array<{ url: string; init?: RequestInit }> = [];

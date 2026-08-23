@@ -3,53 +3,34 @@ import { readBytesLimited } from "../../http/body.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { JCBError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
-import { type Credentials, type LoginOptions, MYPAGE_PATH, performLogin } from "./login.ts";
+import { MYPAGE_PATH } from "./login.ts";
 import { parseStatement, statementRowToCashOut, statementSequences } from "./parser.ts";
-import { type Fetcher, HttpSession } from "./session.ts";
+import { DEFAULT_BASE_URL, type JCBContext, resolveJCBPath } from "./context.ts";
 
-export const DEFAULT_BASE_URL = "https://my.jcb.co.jp";
 export const DETAIL_PATH = "/iss-pc/member/debit/details/debitDetail.html";
 export const DETAIL_MENU_PATH = "/iss-pc/member/debit/details/debitDetailMenu.html";
 export const DETAIL_MENU_LINK_ID = "myj_main_debitDetailMenu";
 export const MAX_RESPONSE_BYTES = 4 << 20;
 
 export interface Config {
-  walletID: WalletID;
-  baseURL?: string;
-  fetch?: Fetcher;
-  now?: () => Date;
+  readonly walletID: WalletID;
+  readonly now?: () => Date;
 }
 
 export class JCBAdapter implements CashOutSource {
-  readonly session: HttpSession;
+  readonly #context: JCBContext;
   readonly walletID: WalletID;
-  readonly baseURL: URL;
   readonly now: () => Date;
-  userAgent = "";
 
-  constructor(config: Config) {
+  constructor(context: JCBContext, config: Config) {
     if (config.walletID.trim() === "") throw new TypeError("jcb: wallet ID is required");
-    const base = new URL(config.baseURL ?? DEFAULT_BASE_URL);
-    if (
-      (base.protocol !== "http:" && base.protocol !== "https:") || base.search !== "" ||
-      base.hash !== ""
-    ) {
-      throw new TypeError(
-        "jcb: base URL must contain only an HTTP(S) scheme, host, and optional path",
-      );
-    }
-    base.pathname = base.pathname.replace(/\/+$/, "");
-    this.session = new HttpSession(config.fetch);
+    this.#context = context;
     this.walletID = config.walletID;
-    this.baseURL = base;
     this.now = config.now ?? (() => new Date());
   }
 
-  async login(credentials: Credentials, options: LoginOptions = {}): Promise<void> {
-    await performLogin(this, credentials, options);
-  }
-
   async fetchCashOuts(period: Period, options: FetchOptions = {}): Promise<CashOut[]> {
+    if (this.#context.authenticationState !== "valid") throw new UnauthenticatedError();
     const sequences = statementSequences(period, this.now());
     if (sequences.length === 0) return [];
     try {
@@ -83,24 +64,16 @@ export class JCBAdapter implements CashOutSource {
     return cashOuts;
   }
 
-  resolvePath(path: string): URL {
-    const result = new URL(this.baseURL);
-    result.pathname = `${this.baseURL.pathname.replace(/\/$/, "")}${path}`;
-    result.search = "";
-    result.hash = "";
-    return result;
-  }
-
   async #fetchStatement(sequence: number, signal?: AbortSignal) {
-    const detailURL = this.resolvePath(DETAIL_PATH);
+    const detailURL = resolveJCBPath(this.#context, DETAIL_PATH);
     detailURL.searchParams.set("seq", String(sequence));
     const headers = new Headers({
       Accept: "text/html,application/xhtml+xml",
       Referer: this.#statementMenuURL().href,
     });
-    if (this.userAgent !== "") headers.set("User-Agent", this.userAgent);
+    if (this.#context.userAgent !== "") headers.set("User-Agent", this.#context.userAgent);
 
-    const response = await this.session.request(detailURL, { headers, signal });
+    const response = await this.#context.session.request(detailURL, { headers, signal });
     if (isLoginResponse(response)) throw new UnauthenticatedError();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
     const html = await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
@@ -113,18 +86,18 @@ export class JCBAdapter implements CashOutSource {
     const menuURL = this.#statementMenuURL();
     const headers = new Headers({
       Accept: "text/html,application/xhtml+xml",
-      Referer: this.resolvePath(MYPAGE_PATH).href,
+      Referer: resolveJCBPath(this.#context, MYPAGE_PATH).href,
     });
-    if (this.userAgent !== "") headers.set("User-Agent", this.userAgent);
+    if (this.#context.userAgent !== "") headers.set("User-Agent", this.#context.userAgent);
 
-    const response = await this.session.request(menuURL, { headers, signal });
+    const response = await this.#context.session.request(menuURL, { headers, signal });
     if (isLoginResponse(response)) throw new UnauthenticatedError();
     if (response.status !== 200) throw new JCBError(`unexpected HTTP status ${response.status}`);
     await decodeLimitedResponse(response, MAX_RESPONSE_BYTES);
   }
 
   #statementMenuURL(): URL {
-    const menuURL = this.resolvePath(DETAIL_MENU_PATH);
+    const menuURL = resolveJCBPath(this.#context, DETAIL_MENU_PATH);
     menuURL.searchParams.set("link_id", DETAIL_MENU_LINK_ID);
     return menuURL;
   }

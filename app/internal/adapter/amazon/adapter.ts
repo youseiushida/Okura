@@ -1,11 +1,9 @@
-import type { Fetcher } from "../../http/session.ts";
 import { readTextLimited } from "../../http/body.ts";
-import { HttpSession } from "../../http/session.ts";
 import type { WalletID } from "../../model/account.ts";
 import type { CashOut } from "../../model/transaction.ts";
 import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
 import { AmazonError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
-import { type Credentials, type LoginOptions, performLogin } from "./login.ts";
+import type { AmazonContext } from "./context.ts";
 import {
   type AmazonOrderReference,
   isEmptyOrderPage,
@@ -15,7 +13,6 @@ import {
 } from "./parser.ts";
 import { AMAZON_USER_AGENT } from "./runtime.ts";
 
-export const DEFAULT_BASE_URL = "https://www.amazon.co.jp";
 export const ORDERS_PATH = "/your-orders/orders";
 export const MAX_RESPONSE_BYTES = 4 << 20;
 const PAGE_SIZE = 10;
@@ -23,45 +20,26 @@ const MAX_PAGES_PER_YEAR = 200;
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 export interface Config {
-  walletID: WalletID;
-  baseURL?: string;
-  fetch?: Fetcher;
-  pageDelayMs?: number;
+  readonly walletID: WalletID;
+  readonly pageDelayMs?: number;
 }
 
 export class AmazonAdapter implements CashOutSource {
-  readonly session: HttpSession;
+  readonly #context: AmazonContext;
   readonly walletID: WalletID;
-  readonly baseURL: URL;
   readonly pageDelayMs: number;
-  #authenticated = false;
 
-  constructor(config: Config) {
+  constructor(context: AmazonContext, config: Config) {
     if (config.walletID.trim() === "") throw new TypeError("amazon: wallet ID is required");
-    const baseURL = new URL(config.baseURL ?? DEFAULT_BASE_URL);
-    if (
-      (baseURL.protocol !== "http:" && baseURL.protocol !== "https:") ||
-      baseURL.username !== "" || baseURL.password !== "" || baseURL.search !== "" ||
-      baseURL.hash !== ""
-    ) {
-      throw new TypeError("amazon: invalid base URL");
-    }
-    baseURL.pathname = baseURL.pathname.replace(/\/+$/, "");
-    this.session = new HttpSession(config.fetch);
+    this.#context = context;
     this.walletID = config.walletID;
-    this.baseURL = baseURL;
     this.pageDelayMs = config.pageDelayMs ?? 250;
-  }
-
-  async login(credentials: Credentials, options: LoginOptions = {}): Promise<void> {
-    await performLogin(this, credentials, options);
-    this.#authenticated = true;
   }
 
   async fetchCashOuts(period: Period, options: FetchOptions = {}): Promise<CashOut[]> {
     validatePeriod(period);
     if (period.from.getTime() === period.to.getTime()) return [];
-    if (!this.#authenticated) throw new UnauthenticatedError();
+    if (this.#context.authenticationState !== "valid") throw new UnauthenticatedError();
 
     const orders = new Map<string, CashOut>();
     for (const year of yearsForPeriod(period)) {
@@ -88,7 +66,7 @@ export class AmazonAdapter implements CashOutSource {
     for (let page = 0; page < MAX_PAGES_PER_YEAR; page += 1) {
       signal?.throwIfAborted();
       const startIndex = page * PAGE_SIZE;
-      const url = new URL(ORDERS_PATH, this.baseURL);
+      const url = new URL(ORDERS_PATH, this.#context.baseURL);
       if (page === 0) {
         url.searchParams.set("orderFilter", "all");
       } else {
@@ -97,8 +75,8 @@ export class AmazonAdapter implements CashOutSource {
         url.searchParams.set("enablePosy", "false");
       }
       url.searchParams.set("timeFilter", `year-${year}`);
-      const response = await this.session.request(url, {
-        headers: orderHeaders(this.baseURL.href, page === 0),
+      const response = await this.#context.session.request(url, {
+        headers: orderHeaders(this.#context.baseURL.href, page === 0),
         signal,
       });
       if (isAuthenticationResponse(response)) throw new UnauthenticatedError();
@@ -166,11 +144,11 @@ export class AmazonAdapter implements CashOutSource {
     referer: string,
     signal?: AbortSignal,
   ): Promise<{ amount: number; occurredAt?: Date }> {
-    const url = new URL(reference.detailPath, this.baseURL);
-    if (url.origin !== this.baseURL.origin) {
+    const url = new URL(reference.detailPath, this.#context.baseURL);
+    if (url.origin !== this.#context.baseURL.origin) {
       throw new UnexpectedPageError("Amazon order detail URL has an unexpected origin");
     }
-    const response = await this.session.request(url, {
+    const response = await this.#context.session.request(url, {
       headers: detailHeaders(referer),
       signal,
     });

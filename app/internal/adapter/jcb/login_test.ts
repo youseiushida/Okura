@@ -1,5 +1,7 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert/";
-import { JCBAdapter } from "./adapter.ts";
+import type { AuthInteraction } from "../../port/auth_interaction.ts";
+import { JCBAuthentication } from "./authentication.ts";
+import { createJCBContext } from "./context.ts";
 import { AuthenticationFailedError } from "./errors.ts";
 import {
   type Credentials,
@@ -13,7 +15,12 @@ import {
 import { HttpSession } from "./session.ts";
 import { startTestServer } from "./test_util.ts";
 
-Deno.test("JCBAdapter.login submits a protected form with its HTTP session", async () => {
+const interaction: AuthInteraction = {
+  otp: { request: () => Promise.reject(new Error("OTP was not expected")) },
+  progress: { publish: () => Promise.resolve() },
+};
+
+Deno.test("JCBAuthentication.login submits a protected form with its HTTP session", async () => {
   const userAgent = "test-js-runtime";
   let serverURL = "";
   const server = startTestServer(async (request) => {
@@ -41,8 +48,8 @@ Deno.test("JCBAdapter.login submits a protected form with its HTTP session", asy
   });
   serverURL = server.url;
   try {
-    const adapter = new JCBAdapter({ walletID: "wallet-jcb", baseURL: server.url });
-    await adapter.login({ userID: "my-id", password: "my-password" }, {
+    const context = createJCBContext({ baseURL: server.url });
+    const auth = new JCBAuthentication(context, {
       generateProtection: ({ session, loginURL, credentials }) => {
         session.cookies.set("PROTECTION_SESSION=seed; Path=/", loginURL, true);
         return Promise.resolve({
@@ -52,39 +59,41 @@ Deno.test("JCBAdapter.login submits a protected form with its HTTP session", asy
         });
       },
     });
-    assertEquals(adapter.userAgent, userAgent);
+    await auth.login({ userID: "my-id", password: "my-password" }, { interaction });
+    assertEquals(context.userAgent, userAgent);
+    assertEquals(context.authenticationState, "valid");
   } finally {
     await server.close();
   }
 });
 
-Deno.test("JCBAdapter.login validates credentials before protection generation", async () => {
-  const adapter = new JCBAdapter({ walletID: "wallet-jcb" });
+Deno.test("JCBAuthentication.login validates credentials before protection generation", async () => {
+  const context = createJCBContext();
   let called = false;
-  await assertRejects(() =>
-    adapter.login({ userID: "", password: "" }, {
-      generateProtection: () => {
-        called = true;
-        return Promise.reject(new Error("must not run"));
-      },
-    }), TypeError);
+  const auth = new JCBAuthentication(context, {
+    generateProtection: () => {
+      called = true;
+      return Promise.reject(new Error("must not run"));
+    },
+  });
+  await assertRejects(() => auth.login({ userID: "", password: "" }, { interaction }), TypeError);
   assertEquals(called, false);
 });
 
-Deno.test("JCBAdapter.login rejects a non-mypage response", async () => {
+Deno.test("JCBAuthentication.login rejects a non-mypage response", async () => {
   const server = startTestServer(() => new Response("invalid credentials"));
   try {
-    const adapter = new JCBAdapter({ walletID: "wallet-jcb", baseURL: server.url });
+    const context = createJCBContext({ baseURL: server.url });
     const credentials = { userID: "id", password: "password" };
-    await assertRejects(() =>
-      adapter.login(credentials, {
-        generateProtection: () =>
-          Promise.resolve({
-            action: `${server.url}${LOGIN_SUBMIT_PATH}`,
-            body: protectedBody(credentials),
-            userAgent: "test-agent",
-          }),
-      }), AuthenticationFailedError);
+    const auth = new JCBAuthentication(context, {
+      generateProtection: () =>
+        Promise.resolve({
+          action: `${server.url}${LOGIN_SUBMIT_PATH}`,
+          body: protectedBody(credentials),
+          userAgent: "test-agent",
+        }),
+    });
+    await assertRejects(() => auth.login(credentials, { interaction }), AuthenticationFailedError);
   } finally {
     await server.close();
   }

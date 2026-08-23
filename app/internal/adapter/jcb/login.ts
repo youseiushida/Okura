@@ -1,12 +1,13 @@
-import type { JCBAdapter } from "./adapter.ts";
 import {
   discardLimited as discardResponseLimited,
   readTextLimited as readResponseTextLimited,
 } from "../../http/body.ts";
+import type { AuthenticationOptions } from "../../port/authentication.ts";
 import { MAX_RESPONSE_BYTES } from "./adapter.ts";
 import { AuthenticationFailedError, JCBError } from "./errors.ts";
 import { executeProtectionIsolated } from "./protection_worker_client.ts";
 import type { HttpSession } from "./session.ts";
+import { type JCBContext, resolveJCBPath } from "./context.ts";
 
 export const LOGIN_PATH = "/Login";
 export const LOGIN_SUBMIT_PATH = "/iss-pc/member/user_manage/Login";
@@ -65,19 +66,8 @@ interface RuntimeResult {
   cookieUpdates: string[];
 }
 
-export async function createAuthenticated(
-  config: ConstructorParameters<typeof JCBAdapter>[0],
-  credentials: Credentials,
-  options: LoginOptions = {},
-): Promise<JCBAdapter> {
-  const { JCBAdapter } = await import("./adapter.ts");
-  const adapter = new JCBAdapter(config);
-  await adapter.login(credentials, options);
-  return adapter;
-}
-
 export async function performLogin(
-  adapter: JCBAdapter,
+  context: JCBContext,
   credentials: Credentials,
   options: LoginOptions,
 ): Promise<void> {
@@ -89,10 +79,10 @@ export async function performLogin(
   const timeout = timeoutSignal(timeoutMs, options.signal);
   try {
     const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
-    const loginURL = adapter.resolvePath(LOGIN_PATH);
+    const loginURL = resolveJCBPath(context, LOGIN_PATH);
     const generator = options.generateProtection ?? generateProtection;
     const form = await generator({
-      session: adapter.session,
+      session: context.session,
       loginURL,
       credentials,
       userAgent,
@@ -100,19 +90,19 @@ export async function performLogin(
     });
 
     const action = new URL(form.action);
-    if (action.origin !== adapter.baseURL.origin || action.pathname !== LOGIN_SUBMIT_PATH) {
+    if (action.origin !== context.baseURL.origin || action.pathname !== LOGIN_SUBMIT_PATH) {
       throw new JCBError(`reject unexpected login form action ${JSON.stringify(form.action)}`);
     }
     validateProtectedBody(form.body, credentials);
 
-    const response = await adapter.session.request(action, {
+    const response = await context.session.request(action, {
       method: "POST",
       signal: timeout.signal,
       headers: {
         Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Content-Type": "application/x-www-form-urlencoded",
-        Origin: adapter.baseURL.origin,
+        Origin: context.baseURL.origin,
         Referer: loginURL.href,
         "User-Agent": form.userAgent || userAgent,
       },
@@ -123,10 +113,33 @@ export async function performLogin(
       const landingPath = response.url === "" ? "" : new URL(response.url).pathname;
       throw new AuthenticationFailedError(response.status, landingPath);
     }
-    adapter.userAgent = form.userAgent || userAgent;
+    context.userAgent = form.userAgent || userAgent;
   } finally {
     timeout.dispose();
   }
+}
+
+export async function validateCurrentSession(
+  context: JCBContext,
+  options: AuthenticationOptions = {},
+): Promise<boolean> {
+  const url = resolveJCBPath(context, MYPAGE_PATH);
+  const response = await context.session.request(url, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml",
+      "User-Agent": context.userAgent,
+    },
+    signal: options.signal,
+  });
+  if (isAuthenticationResponse(response)) {
+    await discardLimited(response, MAX_RESPONSE_BYTES);
+    return false;
+  }
+  await discardLimited(response, MAX_RESPONSE_BYTES);
+  if (!isMypageResponse(response)) {
+    throw new JCBError(`validate MyJCB session: unexpected HTTP ${response.status}`);
+  }
+  return true;
 }
 
 export async function generateProtection(context: ProtectionContext): Promise<ProtectedForm> {
@@ -248,6 +261,14 @@ async function discardLimited(response: Response, limit: number): Promise<void> 
 
 function normalizedPath(url: URL): string {
   return url.pathname.toLowerCase().replace(/\/+$/, "");
+}
+
+function isAuthenticationResponse(response: Response): boolean {
+  if (response.status === 401 || response.status === 403) return true;
+  if (response.url === "") return false;
+  const path = normalizedPath(new URL(response.url));
+  return path === normalizedPath(new URL(LOGIN_PATH, "https://invalid.local")) ||
+    path === normalizedPath(new URL(LOGIN_SUBMIT_PATH, "https://invalid.local"));
 }
 
 function timeoutSignal(timeoutMs: number, parent?: AbortSignal): {

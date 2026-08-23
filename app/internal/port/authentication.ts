@@ -16,7 +16,7 @@ export interface JsonObject {
   readonly [key: string]: JsonValue;
 }
 
-export interface ProviderSessionSnapshot {
+export interface ProviderSessionSnapshot<Provider extends ProviderID = ProviderID> {
   /**
    * providerごとのsnapshot schema version。
    */
@@ -25,7 +25,7 @@ export interface ProviderSessionSnapshot {
   /**
    * 復元先取り違え防止のためpayload内にも保持する。
    */
-  readonly provider: ProviderID;
+  readonly provider: Provider;
 
   /**
    * ISO 8601形式。
@@ -49,6 +49,20 @@ export type SessionValidation =
     readonly status: "expired";
   };
 
+export type SessionRestoreRejectionReason =
+  | "malformed"
+  | "provider-mismatch"
+  | "unsupported-schema";
+
+export type SessionRestoreResult =
+  | {
+    readonly status: "restored";
+  }
+  | {
+    readonly status: "rejected";
+    readonly reason: SessionRestoreRejectionReason;
+  };
+
 export interface AuthenticationOptions {
   readonly signal?: AbortSignal;
 }
@@ -62,8 +76,11 @@ export interface LoginOptions extends AuthenticationOptions {
  *
  * Credentialsはprovider固有の型とする。
  */
-export interface AuthenticationPort<Credentials> {
-  readonly provider: ProviderID;
+export interface AuthenticationPort<
+  Provider extends ProviderID,
+  Credentials,
+> {
+  readonly provider: Provider;
 
   /**
    * 保存済みsnapshotをProviderContextへ復元する。
@@ -73,7 +90,7 @@ export interface AuthenticationPort<Credentials> {
    *
    * 復元しただけでは認証済みとして扱ってはいけない。
    */
-  restoreSession(snapshot: unknown): void;
+  restoreSession(snapshot: unknown): SessionRestoreResult;
 
   /**
    * 現在のCookieで認証済みページへアクセスし、
@@ -103,7 +120,7 @@ export interface AuthenticationPort<Credentials> {
    *
    * 有効性未確認の状態では例外にする。
    */
-  captureSession(): ProviderSessionSnapshot;
+  captureSession(): ProviderSessionSnapshot<Provider>;
 
   /**
    * Cookieとprovider固有認証状態をメモリから消去する。

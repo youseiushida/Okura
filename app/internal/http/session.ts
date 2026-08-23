@@ -1,6 +1,6 @@
 export type Fetcher = (input: URL | Request | string, init?: RequestInit) => Promise<Response>;
 
-interface StoredCookie {
+export interface CookieSnapshot {
   name: string;
   value: string;
   domain: string;
@@ -12,7 +12,22 @@ interface StoredCookie {
 }
 
 export class CookieStore {
-  readonly #cookies: StoredCookie[] = [];
+  readonly #cookies: CookieSnapshot[] = [];
+
+  capture(): CookieSnapshot[] {
+    this.#discardExpired();
+    return this.#cookies.map((cookie) => ({ ...cookie }));
+  }
+
+  restore(snapshot: unknown): void {
+    const cookies = parseCookieSnapshot(snapshot);
+    this.#cookies.splice(0, this.#cookies.length, ...cookies);
+    this.#discardExpired();
+  }
+
+  clear(): void {
+    this.#cookies.splice(0, this.#cookies.length);
+  }
 
   remember(response: Response, requestURL: URL): void {
     const headers = response.headers as Headers & { getSetCookie?: () => string[] };
@@ -26,7 +41,7 @@ export class CookieStore {
     const separator = pair.indexOf("=");
     if (separator <= 0) return;
 
-    const cookie: StoredCookie = {
+    const cookie: CookieSnapshot = {
       name: pair.slice(0, separator).trim(),
       value: pair.slice(separator + 1).trim(),
       domain: requestURL.hostname.toLowerCase(),
@@ -109,6 +124,64 @@ export class CookieStore {
     const value = headers.get("set-cookie");
     return value === null ? [] : [value];
   }
+
+  #discardExpired(): void {
+    const now = Date.now();
+    for (let index = this.#cookies.length - 1; index >= 0; index -= 1) {
+      const expiresAt = this.#cookies[index]?.expiresAt;
+      if (expiresAt !== undefined && expiresAt <= now) this.#cookies.splice(index, 1);
+    }
+  }
+}
+
+export function parseCookieSnapshot(value: unknown): CookieSnapshot[] {
+  if (!Array.isArray(value)) throw new TypeError("cookie snapshot must be an array");
+  const result: CookieSnapshot[] = [];
+  const keys = new Set<string>();
+  for (const [index, item] of value.entries()) {
+    if (!isRecord(item)) throw new TypeError(`cookie snapshot entry ${index} must be an object`);
+    const { name, domain, path, value: cookieValue, hostOnly, secure, httpOnly, expiresAt } = item;
+    if (typeof name !== "string" || !/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) {
+      throw new TypeError(`cookie snapshot entry ${index} has an invalid name`);
+    }
+    if (
+      typeof cookieValue !== "string" || cookieValue.includes(";") ||
+      hasControlCharacter(cookieValue)
+    ) {
+      throw new TypeError(`cookie snapshot entry ${index} has an invalid value`);
+    }
+    if (
+      typeof domain !== "string" || domain !== domain.toLowerCase() ||
+      !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/.test(domain) || domain.includes("..")
+    ) {
+      throw new TypeError(`cookie snapshot entry ${index} has an invalid domain`);
+    }
+    if (typeof path !== "string" || !path.startsWith("/") || hasControlCharacter(path)) {
+      throw new TypeError(`cookie snapshot entry ${index} has an invalid path`);
+    }
+    if (
+      typeof hostOnly !== "boolean" || typeof secure !== "boolean" || typeof httpOnly !== "boolean"
+    ) {
+      throw new TypeError(`cookie snapshot entry ${index} has invalid flags`);
+    }
+    if (expiresAt !== undefined && (typeof expiresAt !== "number" || !Number.isFinite(expiresAt))) {
+      throw new TypeError(`cookie snapshot entry ${index} has an invalid expiration`);
+    }
+    const key = `${name}\u0000${domain}\u0000${path}`;
+    if (keys.has(key)) throw new TypeError(`cookie snapshot entry ${index} is duplicated`);
+    keys.add(key);
+    result.push({
+      name,
+      value: cookieValue,
+      domain,
+      path,
+      hostOnly,
+      secure,
+      httpOnly,
+      ...(expiresAt === undefined ? {} : { expiresAt }),
+    });
+  }
+  return result;
 }
 
 export class HttpSession {
@@ -200,4 +273,16 @@ function pathMatches(pathname: string, cookiePath: string): boolean {
 
 function isRedirect(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code <= 0x1f || code === 0x7f) return true;
+  }
+  return false;
 }

@@ -3,7 +3,9 @@ import type {
   AuthenticationOptions,
   AuthenticationPort,
   ProviderSessionSnapshot,
+  SessionRestoreRejectionReason,
 } from "../port/authentication.ts";
+import type { ProviderID } from "../port/provider.ts";
 import type { SessionKey, SessionVaultOptions, SessionVaultPort } from "../port/session_vault.ts";
 
 export type SessionPersistence =
@@ -22,11 +24,32 @@ export interface EnsureAuthenticationResult {
    */
   readonly session: "reused" | "created";
   readonly persistence: SessionPersistence;
+
+  /**
+   * 壊れた・非対応の保存snapshotから新規ログインへ復旧した場合だけ返す。
+   */
+  readonly recovery?: {
+    readonly reason: SessionRestoreRejectionReason;
+    readonly storedSnapshot: "removed" | "replaced" | "retained";
+  };
 }
 
-export interface EnsureAuthenticationOptions<Credentials> extends AuthenticationOptions {
-  readonly key: SessionKey;
+export type InvalidSessionRecovery = "remove" | "replace";
+
+export interface EnsureAuthenticationOptions<
+  Provider extends ProviderID,
+  Credentials,
+> extends AuthenticationOptions {
+  readonly key: SessionKey<Provider>;
   readonly interaction: AuthInteraction;
+
+  /**
+   * remove: 新規ログイン前に壊れたsnapshotを削除する。
+   * replace: snapshotを残し、新規ログイン成功時のsaveで置換する。
+   *
+   * 省略時はremove。どちらもrestore失敗で永久停止せず再ログインへ進む。
+   */
+  readonly invalidSessionRecovery?: InvalidSessionRecovery;
 
   /**
    * 保存済みセッションが利用できなかった場合にだけ呼ばれる。
@@ -42,12 +65,12 @@ export interface EnsureAuthenticationOptions<Credentials> extends Authentication
  * provider固有の認証手順とsnapshot検証はAuthenticationPortへ、
  * 暗号化と永続化はSessionVaultPortへ委譲する。
  */
-export class AuthCoordinator<Credentials> {
-  readonly #auth: AuthenticationPort<Credentials>;
+export class AuthCoordinator<Provider extends ProviderID, Credentials> {
+  readonly #auth: AuthenticationPort<Provider, Credentials>;
   readonly #vault: SessionVaultPort;
 
   constructor(
-    auth: AuthenticationPort<Credentials>,
+    auth: AuthenticationPort<Provider, Credentials>,
     vault: SessionVaultPort,
   ) {
     this.#auth = auth;
@@ -55,7 +78,7 @@ export class AuthCoordinator<Credentials> {
   }
 
   async ensureAuthenticated(
-    options: EnsureAuthenticationOptions<Credentials>,
+    options: EnsureAuthenticationOptions<Provider, Credentials>,
   ): Promise<EnsureAuthenticationResult> {
     const { key, interaction, getCredentials, signal } = options;
 
@@ -70,22 +93,34 @@ export class AuthCoordinator<Credentials> {
     const snapshot = await this.#vault.load(key, { signal });
     signal?.throwIfAborted();
 
+    let recovery: EnsureAuthenticationResult["recovery"];
     if (snapshot !== undefined) {
       // restoreSessionは外部由来のsnapshotを検証する信頼境界。
-      // 復元エラーの種類を推測せず、そのまま呼び出し元へ返す。
-      this.#auth.restoreSession(snapshot);
+      const restored = this.#auth.restoreSession(snapshot);
 
-      const validation = await this.#auth.validateSession({ signal });
-      signal?.throwIfAborted();
+      if (restored.status === "restored") {
+        const validation = await this.#auth.validateSession({ signal });
+        signal?.throwIfAborted();
 
-      if (validation.status === "valid") {
-        // validateSessionの応答でCookieが更新されることがあるため再保存する。
-        return {
-          session: "reused",
-          persistence: await this.#persist(key, { signal }),
+        if (validation.status === "valid") {
+          // validateSessionの応答でCookieが更新されることがあるため再保存する。
+          return {
+            session: "reused",
+            persistence: await this.#persist(key, { signal }),
+          };
+        }
+      } else {
+        const strategy = options.invalidSessionRecovery ?? "remove";
+        if (strategy === "remove") {
+          await this.#vault.remove(key, { signal });
+          signal?.throwIfAborted();
+        }
+        recovery = {
+          reason: restored.reason,
+          storedSnapshot: strategy === "remove" ? "removed" : "retained",
         };
       }
-    } 
+    }
     // expiredまたはsnapshotなし。
     // 新規ログインを必ず空の状態から開始する。
     this.#auth.clearSession();
@@ -107,14 +142,22 @@ export class AuthCoordinator<Credentials> {
       throw error;
     }
 
+    const persistence = await this.#persist(key, { signal });
+    if (
+      recovery?.storedSnapshot === "retained" &&
+      persistence.status === "saved"
+    ) {
+      recovery = { ...recovery, storedSnapshot: "replaced" };
+    }
     return {
       session: "created",
-      persistence: await this.#persist(key, { signal }),
+      persistence,
+      ...(recovery === undefined ? {} : { recovery }),
     };
   }
 
   async #persist(
-    key: SessionKey,
+    key: SessionKey<Provider>,
     options: SessionVaultOptions,
   ): Promise<SessionPersistence> {
     options.signal?.throwIfAborted();
@@ -136,9 +179,9 @@ export class AuthCoordinator<Credentials> {
   }
 }
 
-function assertSnapshotProvider(
-  snapshot: ProviderSessionSnapshot,
-  key: SessionKey,
+function assertSnapshotProvider<Provider extends ProviderID>(
+  snapshot: ProviderSessionSnapshot<Provider>,
+  key: SessionKey<Provider>,
 ): void {
   if (snapshot.provider === key.provider) return;
 

@@ -1,8 +1,8 @@
 import type { ProviderSessionSnapshot } from "./authentication.ts";
 import type { ProviderID } from "./provider.ts";
 
-export interface SessionKey {
-  readonly provider: ProviderID;
+export interface SessionKey<Provider extends ProviderID = ProviderID> {
+  readonly provider: Provider;
 
   /**
    * ログインアカウントを選択するための名称。
@@ -37,8 +37,8 @@ export interface SessionVaultPort {
    * 存在しない場合だけundefinedを返す。
    * 復号失敗やI/O障害は例外にする。
    */
-  load(
-    key: SessionKey,
+  load<Provider extends ProviderID>(
+    key: SessionKey<Provider>,
     options?: SessionVaultOptions,
   ): Promise<unknown | undefined>;
 
@@ -48,9 +48,9 @@ export interface SessionVaultPort {
    * key.providerとsnapshot.providerが一致しない場合は
    * TypeErrorを投げ、既存データを変更してはいけない。
    */
-  save(
-    key: SessionKey,
-    snapshot: ProviderSessionSnapshot,
+  save<Provider extends ProviderID>(
+    key: SessionKey<Provider>,
+    snapshot: ProviderSessionSnapshot<Provider>,
     options?: SessionVaultOptions,
   ): Promise<void>;
 
@@ -58,8 +58,8 @@ export interface SessionVaultPort {
    * ローカル保存だけを削除する。
    * providerへのlogout通信は行わない。
    */
-  remove(
-    key: SessionKey,
+  remove<Provider extends ProviderID>(
+    key: SessionKey<Provider>,
     options?: SessionVaultOptions,
   ): Promise<void>;
 }

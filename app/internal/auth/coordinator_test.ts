@@ -5,6 +5,7 @@ import type {
   AuthenticationPort,
   LoginOptions,
   ProviderSessionSnapshot,
+  SessionRestoreResult,
   SessionValidation,
 } from "../port/authentication.ts";
 import type { ProviderID } from "../port/provider.ts";
@@ -43,12 +44,12 @@ const interaction: AuthInteraction = {
   },
 };
 
-class FakeAuthentication implements AuthenticationPort<TestCredentials> {
+class FakeAuthentication implements AuthenticationPort<ProviderID, TestCredentials> {
   readonly provider: ProviderID;
   readonly events: string[];
   validation: SessionValidation = { status: "valid" };
   loginError?: unknown;
-  restoreError?: unknown;
+  restoreResult: SessionRestoreResult = { status: "restored" };
   captured = capturedSnapshot;
 
   constructor(events: string[], provider: ProviderID = "amazon") {
@@ -56,9 +57,9 @@ class FakeAuthentication implements AuthenticationPort<TestCredentials> {
     this.provider = provider;
   }
 
-  restoreSession(_snapshot: unknown): void {
+  restoreSession(_snapshot: unknown): SessionRestoreResult {
     this.events.push("restore");
-    if (this.restoreError !== undefined) throw this.restoreError;
+    return this.restoreResult;
   }
 
   validateSession(
@@ -97,17 +98,17 @@ class FakeSessionVault implements SessionVaultPort {
     this.loaded = loaded;
   }
 
-  load(
-    _key: SessionKey,
+  load<Provider extends ProviderID>(
+    _key: SessionKey<Provider>,
     _options?: SessionVaultOptions,
   ): Promise<unknown | undefined> {
     this.events.push("load");
     return Promise.resolve(this.loaded);
   }
 
-  save(
-    _key: SessionKey,
-    snapshot: ProviderSessionSnapshot,
+  save<Provider extends ProviderID>(
+    _key: SessionKey<Provider>,
+    snapshot: ProviderSessionSnapshot<Provider>,
     _options?: SessionVaultOptions,
   ): Promise<void> {
     this.events.push("save");
@@ -116,8 +117,8 @@ class FakeSessionVault implements SessionVaultPort {
     return Promise.resolve();
   }
 
-  remove(
-    _key: SessionKey,
+  remove<Provider extends ProviderID>(
+    _key: SessionKey<Provider>,
     _options?: SessionVaultOptions,
   ): Promise<void> {
     this.events.push("remove");
@@ -256,24 +257,64 @@ Deno.test("AuthCoordinator clears a partially authenticated session after login 
   assertEquals(events, ["load", "clear", "login", "clear"]);
 });
 
-Deno.test("AuthCoordinator does not guess how to recover from a restore failure", async () => {
+Deno.test("AuthCoordinator removes a malformed snapshot and logs in again", async () => {
   const events: string[] = [];
   const auth = new FakeAuthentication(events);
   const vault = new FakeSessionVault(events, storedSnapshot);
-  auth.restoreError = new Error("unsupported snapshot");
+  auth.restoreResult = { status: "rejected", reason: "unsupported-schema" };
 
-  await assertRejects(
-    () =>
-      new AuthCoordinator(auth, vault).ensureAuthenticated({
-        key,
-        interaction,
-        getCredentials: () => Promise.resolve({ password: "secret" }),
-      }),
-    Error,
-    "unsupported snapshot",
-  );
+  const result = await new AuthCoordinator(auth, vault).ensureAuthenticated({
+    key,
+    interaction,
+    getCredentials: () => Promise.resolve({ password: "secret" }),
+  });
 
-  assertEquals(events, ["load", "restore"]);
+  assertEquals(result.recovery, {
+    reason: "unsupported-schema",
+    storedSnapshot: "removed",
+  });
+  assertEquals(events, ["load", "restore", "remove", "clear", "login", "capture", "save"]);
+});
+
+Deno.test("AuthCoordinator can replace a malformed snapshot only after login", async () => {
+  const events: string[] = [];
+  const auth = new FakeAuthentication(events);
+  const vault = new FakeSessionVault(events, storedSnapshot);
+  auth.restoreResult = { status: "rejected", reason: "malformed" };
+
+  const result = await new AuthCoordinator(auth, vault).ensureAuthenticated({
+    key,
+    interaction,
+    invalidSessionRecovery: "replace",
+    getCredentials: () => Promise.resolve({ password: "secret" }),
+  });
+
+  assertEquals(result.recovery, {
+    reason: "malformed",
+    storedSnapshot: "replaced",
+  });
+  assertEquals(events, ["load", "restore", "clear", "login", "capture", "save"]);
+});
+
+Deno.test("AuthCoordinator reports a malformed snapshot as retained when replacement save fails", async () => {
+  const events: string[] = [];
+  const auth = new FakeAuthentication(events);
+  const vault = new FakeSessionVault(events, storedSnapshot);
+  auth.restoreResult = { status: "rejected", reason: "malformed" };
+  vault.saveError = new Error("disk full");
+
+  const result = await new AuthCoordinator(auth, vault).ensureAuthenticated({
+    key,
+    interaction,
+    invalidSessionRecovery: "replace",
+    getCredentials: () => Promise.resolve({ password: "secret" }),
+  });
+
+  assertEquals(result.recovery, {
+    reason: "malformed",
+    storedSnapshot: "retained",
+  });
+  assertEquals(result.persistence.status, "failed");
 });
 
 Deno.test("AuthCoordinator rejects a provider mismatch before touching the vault", async () => {

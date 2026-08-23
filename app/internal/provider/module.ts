@@ -1,5 +1,4 @@
 import type { AuthenticationPort } from "../port/authentication.ts";
-import type { ProviderID } from "../port/provider.ts";
 import type { CashInSource, CashOutSource, TransferSource } from "../port/source.ts";
 
 export interface ProviderSources {
@@ -15,10 +14,10 @@ export interface ProviderSources {
  * この型全体を渡してはいけない。
  */
 export interface ProviderModule<
+  Provider extends string,
   Credentials,
   Sources extends ProviderSources,
 > {
-  readonly id: ProviderID;
-  readonly auth: AuthenticationPort<Credentials>;
+  readonly auth: AuthenticationPort<Provider, Credentials>;
   readonly sources: Sources;
 }

@@ -7,6 +7,7 @@ import {
   assertThrows,
 } from "@std/assert/";
 import { DETAIL_MENU_LINK_ID, DETAIL_MENU_PATH, DETAIL_PATH, JCBAdapter } from "./adapter.ts";
+import { createJCBContext } from "./context.ts";
 import { MYPAGE_PATH } from "./login.ts";
 import { PeriodUnavailableError, UnauthenticatedError } from "./errors.ts";
 import { parseStatement, statementSequences } from "./parser.ts";
@@ -40,9 +41,10 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
   });
   serverURL = server.url;
   try {
-    const adapter = new JCBAdapter({
+    const context = createJCBContext({ baseURL: server.url });
+    context.authenticationState = "valid";
+    const adapter = new JCBAdapter(context, {
       walletID: "wallet-jcb",
-      baseURL: server.url,
       now: () => jstDate(2026, 8, 22, 12),
     });
     const cashOuts = await adapter.fetchCashOuts({
@@ -71,9 +73,10 @@ Deno.test("JCBAdapter.fetchCashOuts detects a login redirect", async () => {
     return Response.redirect(new URL("/Login", request.url), 302);
   });
   try {
-    const adapter = new JCBAdapter({
+    const context = createJCBContext({ baseURL: server.url });
+    context.authenticationState = "valid";
+    const adapter = new JCBAdapter(context, {
       walletID: "wallet-jcb",
-      baseURL: server.url,
       now: () => jstDate(2026, 8, 22, 12),
     });
     const error = await assertRejects(() =>

@@ -1,37 +1,33 @@
-import { JCBAdapter } from "../adapter/jcb/mod.ts";
-import type { Credentials } from "../adapter/jcb/mod.ts";
-import { AmazonAdapter } from "../adapter/amazon/mod.ts";
-import type {
-  Credentials as AmazonCredentials,
-  LoginOptions as AmazonLoginOptions,
-} from "../adapter/amazon/mod.ts";
+import { createJCBModule } from "../adapter/jcb/mod.ts";
+import type { Credentials, JCBModule } from "../adapter/jcb/mod.ts";
+import { createAmazonModule } from "../adapter/amazon/mod.ts";
+import type { AmazonModule, Credentials as AmazonCredentials } from "../adapter/amazon/mod.ts";
+import { createDefaultSessionVault } from "../adapter/session/dpapi_vault.ts";
+import { AuthCoordinator, type EnsureAuthenticationResult } from "../auth/coordinator.ts";
 import type { CashOut } from "../model/transaction.ts";
+import type { AuthInteraction } from "../port/auth_interaction.ts";
+import type { SessionVaultPort } from "../port/session_vault.ts";
 import type { Period } from "../port/source.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-interface JCBClient {
-  login(credentials: Credentials): Promise<void>;
-  fetchCashOuts(period: Period): Promise<CashOut[]>;
-}
-
-interface AmazonClient {
-  login(credentials: AmazonCredentials, options?: AmazonLoginOptions): Promise<void>;
-  fetchCashOuts(period: Period): Promise<CashOut[]>;
-}
+export const SUPPORTED_PROVIDER_IDS = ["jcb", "amazon"] as const;
 
 export interface CLIEnvironment {
   getEnv(name: string): string | undefined;
   askText(message: string): Promise<string>;
   askSecret(message: string): Promise<string>;
   write(message: string): void;
-  createJCB(walletID: string): JCBClient;
-  createAmazon?(walletID: string): AmazonClient;
+  warn(message: string): void;
+  createSessionVault(): SessionVaultPort;
+  createJCB(walletID: string): JCBModule;
+  createAmazon(walletID: string): AmazonModule;
 }
 
 export interface JCBFetchArguments {
   walletID: string;
+  profile: string;
   fromLabel: string;
   toLabel: string;
   period: Period;
@@ -43,8 +39,10 @@ const defaultEnvironment: CLIEnvironment = {
   askText: (message) => Promise.resolve(globalThis.prompt(message) ?? ""),
   askSecret: readHiddenLine,
   write: (message) => console.log(message),
-  createJCB: (walletID) => new JCBAdapter({ walletID }),
-  createAmazon: (walletID) => new AmazonAdapter({ walletID }),
+  warn: (message) => console.warn(message),
+  createSessionVault: createDefaultSessionVault,
+  createJCB: (walletID) => createJCBModule({ walletID }),
+  createAmazon: (walletID) => createAmazonModule({ walletID }),
 };
 
 export async function runCLI(
@@ -56,7 +54,10 @@ export async function runCLI(
     environment.write(usage());
     return 0;
   }
-  if (args[1] !== "fetch" || (args[0] !== "jcb" && args[0] !== "amazon")) {
+  if (
+    args[1] !== "fetch" ||
+    !(SUPPORTED_PROVIDER_IDS as readonly string[]).includes(args[0] ?? "")
+  ) {
     throw new TypeError(`unknown command\n\n${usage()}`);
   }
 
@@ -66,38 +67,48 @@ export async function runCLI(
 
 async function runJCBFetch(args: string[], environment: CLIEnvironment): Promise<number> {
   const options = parseJCBFetchArguments(args);
-  const userID = environment.getEnv("JCB_USER_ID")?.trim() ||
-    (await environment.askText("MyJCB user ID:")).trim();
-  const password = environment.getEnv("JCB_PASSWORD") ||
-    await environment.askSecret("MyJCB password: ");
-  if (userID === "") throw new TypeError("MyJCB user ID is required");
-  if (password === "") throw new TypeError("MyJCB password is required");
-
-  const adapter = environment.createJCB(options.walletID);
-  await adapter.login({ userID, password });
-  const cashOuts = await adapter.fetchCashOuts(options.period);
+  const module = environment.createJCB(options.walletID);
+  const result = await new AuthCoordinator(module.auth, environment.createSessionVault())
+    .ensureAuthenticated({
+      key: { provider: module.auth.provider, profile: options.profile },
+      interaction: createAuthInteraction(environment),
+      getCredentials: async (): Promise<Credentials> => {
+        const userID = environment.getEnv("JCB_USER_ID")?.trim() ||
+          (await environment.askText("MyJCB user ID:")).trim();
+        const password = environment.getEnv("JCB_PASSWORD") ||
+          await environment.askSecret("MyJCB password: ");
+        if (userID === "") throw new TypeError("MyJCB user ID is required");
+        if (password === "") throw new TypeError("MyJCB password is required");
+        return { userID, password };
+      },
+    });
+  reportAuthenticationResult(result, environment);
+  const cashOuts = await module.sources.cashOuts.fetchCashOuts(options.period);
   environment.write(formatCashOuts(cashOuts, options));
   return 0;
 }
 
 async function runAmazonFetch(args: string[], environment: CLIEnvironment): Promise<number> {
   const options = parseAmazonFetchArguments(args);
-  const email = normalizeAmazonEmail(
-    environment.getEnv("AMAZON_EMAIL")?.trim() ||
-      (await environment.askText("Amazon email: ")).trim(),
-  );
-  const password = environment.getEnv("AMAZON_PASSWORD") ||
-    await environment.askSecret("Amazon password: ");
-  if (email === "") throw new TypeError("Amazon email is required");
-  if (password === "") throw new TypeError("Amazon password is required");
-
-  const adapter = environment.createAmazon?.(options.walletID) ??
-    new AmazonAdapter({ walletID: options.walletID });
-  await adapter.login({ email, password }, {
-    askVerificationCode: async () =>
-      await environment.askText("Amazon verification code (if requested): "),
-  });
-  const cashOuts = await adapter.fetchCashOuts(options.period);
+  const module = environment.createAmazon(options.walletID);
+  const result = await new AuthCoordinator(module.auth, environment.createSessionVault())
+    .ensureAuthenticated({
+      key: { provider: module.auth.provider, profile: options.profile },
+      interaction: createAuthInteraction(environment),
+      getCredentials: async (): Promise<AmazonCredentials> => {
+        const email = normalizeAmazonEmail(
+          environment.getEnv("AMAZON_EMAIL")?.trim() ||
+            (await environment.askText("Amazon email: ")).trim(),
+        );
+        const password = environment.getEnv("AMAZON_PASSWORD") ||
+          await environment.askSecret("Amazon password: ");
+        if (email === "") throw new TypeError("Amazon email is required");
+        if (password === "") throw new TypeError("Amazon password is required");
+        return { email, password };
+      },
+    });
+  reportAuthenticationResult(result, environment);
+  const cashOuts = await module.sources.cashOuts.fetchCashOuts(options.period);
   environment.write(formatCashOuts(cashOuts, options));
   return 0;
 }
@@ -112,6 +123,7 @@ export function parseAmazonFetchArguments(args: string[]): JCBFetchArguments {
 
 function parseFetchArguments(args: string[], defaultWalletID: string): JCBFetchArguments {
   let walletID = defaultWalletID;
+  let profile = "default";
   let fromLabel = "";
   let toLabel = "";
   let format: JCBFetchArguments["format"] = "table";
@@ -126,6 +138,9 @@ function parseFetchArguments(args: string[], defaultWalletID: string): JCBFetchA
     switch (name) {
       case "--wallet-id":
         walletID = value;
+        break;
+      case "--profile":
+        profile = value;
         break;
       case "--from":
         fromLabel = value;
@@ -146,6 +161,7 @@ function parseFetchArguments(args: string[], defaultWalletID: string): JCBFetchA
   }
 
   if (walletID.trim() === "") throw new TypeError("--wallet-id must not be empty");
+  if (profile.trim() === "") throw new TypeError("--profile must not be empty");
   if (fromLabel === "") throw new TypeError("--from is required");
   if (toLabel === "") throw new TypeError("--to is required");
   const from = parseJSTDate(fromLabel, "--from");
@@ -155,11 +171,57 @@ function parseFetchArguments(args: string[], defaultWalletID: string): JCBFetchA
   }
   return {
     walletID,
+    profile,
     fromLabel,
     toLabel,
     period: { from, to: new Date(toInclusive.getTime() + DAY_MS) },
     format,
   };
+}
+
+function createAuthInteraction(environment: CLIEnvironment): AuthInteraction {
+  return {
+    otp: {
+      request: async (challenge) => ({
+        action: "submit",
+        code: await environment.askText(
+          `${challenge.provider} verification code (${challenge.channel}): `,
+        ),
+      }),
+    },
+    progress: {
+      publish: (event) => {
+        if (event.kind === "external-approval" && event.state === "required") {
+          environment.warn(
+            event.message ?? `${event.provider}: external approval is required (${event.method})`,
+          );
+        }
+        return Promise.resolve();
+      },
+    },
+  };
+}
+
+function reportAuthenticationResult(
+  result: EnsureAuthenticationResult,
+  environment: CLIEnvironment,
+): void {
+  if (result.recovery !== undefined) {
+    environment.warn(
+      `Saved ${result.recovery.reason} session was ${result.recovery.storedSnapshot}; logged in again.`,
+    );
+  }
+  if (result.persistence.status === "failed") {
+    environment.warn(
+      `Authenticated, but the session could not be saved: ${
+        errorMessage(result.persistence.error)
+      }`,
+    );
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function formatCashOuts(cashOuts: CashOut[], options: JCBFetchArguments): string {
@@ -256,6 +318,7 @@ Development:
 
 Options:
   --wallet-id ID       Wallet ID (default: adapter name)
+  --profile NAME       Saved login profile (default: default)
   --from DATE          First date to fetch (inclusive)
   --to DATE            Last date to fetch (inclusive)
   --format table|json  Output format (default: table)

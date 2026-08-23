@@ -1,5 +1,9 @@
 import type { HttpSession } from "../../http/session.ts";
 import { readTextLimited } from "../../http/body.ts";
+import type {
+  AuthenticationOptions,
+  LoginOptions as PortLoginOptions,
+} from "../../port/authentication.ts";
 import {
   AuthenticationFailedError,
   UnexpectedPageError,
@@ -8,6 +12,7 @@ import {
 import { documentFieldValue, findForm, findFormByAction, formBody } from "./forms.ts";
 import { AMAZON_USER_AGENT, parseAmazonPage } from "./runtime.ts";
 import { executeAmazonScriptsIsolated } from "./script_worker_client.ts";
+import { AMAZON_PROVIDER_ID } from "./context.ts";
 
 export const SIGN_IN_PATH = "/ap/signin";
 export const ORDER_HISTORY_PATH = "/gp/css/order-history";
@@ -25,15 +30,12 @@ export interface LoginTarget {
   baseURL: URL;
 }
 
-export interface LoginOptions {
-  askVerificationCode?: () => Promise<string>;
-  signal?: AbortSignal;
-}
+export type LoginOptions = PortLoginOptions;
 
 export async function performLogin(
   target: LoginTarget,
   credentials: Credentials,
-  options: LoginOptions = {},
+  options: LoginOptions,
 ): Promise<void> {
   if (credentials.email.trim() === "") throw new TypeError("amazon: email is required");
   if (credentials.password === "") throw new TypeError("amazon: password is required");
@@ -111,6 +113,22 @@ export async function performLogin(
   validateAuthenticatedHistory(historyResponse, historyHTML, target.baseURL);
 }
 
+export async function validateCurrentSession(
+  target: LoginTarget,
+  options: AuthenticationOptions = {},
+): Promise<boolean> {
+  const historyURL = new URL(ORDER_HISTORY_PATH, target.baseURL);
+  const response = await target.session.request(historyURL, {
+    headers: navigationHeaders(target.baseURL.href),
+    signal: options.signal,
+  });
+  const html = await decodeLimitedResponse(response, MAX_LOGIN_RESPONSE_BYTES);
+  if (isAuthenticationPage(response) || isVerificationPage(response, html)) return false;
+  if (response.status === 401 || response.status === 403) return false;
+  validateAuthenticatedHistory(response, html, target.baseURL);
+  return true;
+}
+
 export function validateAuthenticatedHistory(
   response: Response,
   html: string,
@@ -166,8 +184,26 @@ async function submitVerification(
   html: string,
   options: LoginOptions,
 ): Promise<Response> {
-  if (options.askVerificationCode === undefined) throw new VerificationRequiredError();
-  const code = (await options.askVerificationCode()).trim();
+  const channel = detectVerificationChannel(html);
+  await options.interaction.progress.publish({
+    kind: "code-sent",
+    provider: AMAZON_PROVIDER_ID,
+    step: "login-otp",
+    channel,
+  }, { signal: options.signal });
+  const reply = await options.interaction.otp.request({
+    provider: AMAZON_PROVIDER_ID,
+    step: "login-otp",
+    attempt: 1,
+    channel,
+    format: "numeric",
+    length: { min: 6, max: 6 },
+    resend: { allowed: false },
+  }, { signal: options.signal });
+  if (reply.action !== "submit") {
+    throw new VerificationRequiredError("Amazon verification code cannot be resent here");
+  }
+  const code = reply.code.trim();
   if (code === "") throw new VerificationRequiredError("Amazon verification code is required");
 
   const dom = parseAmazonPage(html, response.url);
@@ -209,6 +245,12 @@ async function submitVerification(
   } finally {
     dom.window.close();
   }
+}
+
+function detectVerificationChannel(html: string): "sms" | "email" {
+  return /e-?mail|メール|@/i.test(html) && !/sms|text message|携帯電話|電話番号/i.test(html)
+    ? "email"
+    : "sms";
 }
 
 function navigationHeaders(referer: string): Headers {
