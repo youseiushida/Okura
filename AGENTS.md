@@ -109,8 +109,6 @@ password、OTP、cookie、session token、認証済みHTMLをそのままcommit�
 
 サイトのJavaScript実行は最後の手段とする。必要な場合はhost processで実行せず、permissionを
 最小化したWorkerへ隔離し、許可host、resource数、個別・合計byte数、timeout、出力schemaを制限する。
-WAFやCAPTCHAを回避するコードは追加しない。
-
 ## 金融モデルへ対応付ける
 
 サイトの画面名ではなく、資金移動の意味でmodelとsourceを選ぶ。
@@ -194,6 +192,17 @@ session復元、新規login、保存、再認証の順序は `AuthCoordinator` �
   それ以外はOS credential store、最後に対話入力とする。環境変数と保存済みpasswordを混ぜない。
 - credential schemaが扱える秘密はidentifier/passwordだけとし、OTP、TOTP seed、外部承認、
   認証link、秘密の質問、CAPTCHA情報を追加しない。
+- CAPTCHA solverなど外部サービスのAPI keyは一次認証情報やsessionへ含めず、
+  外部サービス秘密用portと用途専用adapterで分離して管理する。
+- 複数providerで使う外部サービス秘密はproviderやprofileへscopeせず、用途ごとに分けたservice名と
+  個人情報を含まない固定accountでOS credential storeへ保存する。provider adapterは具体solverや
+  その秘密adapterへ依存せず、CAPTCHA種別ごとのcapability portだけに依存する。
+- 外部サービス秘密の取得順は環境変数、OS credential storeとする。保存は独立した設定commandによる
+  明示操作だけで行い、環境変数からの自動保存、平文fileへのfallback、provider login中のpromptを行わない。
+- 有効なsessionを再利用できる場合は外部サービス秘密の環境変数やstoreにも触れない。solver残高不足、
+  CAPTCHA失敗、provider認証失敗、通信失敗、abort時に保存済みの外部サービス秘密を削除・上書きしない。
+- 外部サービス秘密の設定・削除はapplication use caseを介し、具体的なservice名、account、環境変数名、
+  値の検証と解決処理は専用adapterとcomposition rootに閉じ込める。
 - credential保存は明示opt-in時かつ新規login成功後だけ行う。login、OTP、通信、WAFの失敗時に
   保存済みcredentialを自動削除・上書きしない。
 - 保存済みcredentialの再入力案内へ変換するのは、providerが一次identifier/passwordを明示的に
@@ -299,6 +308,9 @@ provider追加によってCLIに認証手順、cookie処理、複数sourceの `P
 - 保存済みsessionではcredentialを要求しないこと。
 - `--reauth`、profile、期間、table/JSON出力。
 - CLIテストでは具体adapter module型をimportしないこと。
+- 外部サービス秘密の設定ではhidden inputを使い、値を出力せず、明示した秘密だけを保存・削除すること。
+- 外部サービス秘密の環境変数優先、store fallback、欠落・不正値、abort、失敗時保持をadapter testで
+  検証すること。
 
 変更後は `app/` で次を実行する。
 
