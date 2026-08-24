@@ -2,7 +2,7 @@ import { createProviderConnection, type ProviderConnection } from "../model/conn
 import type { Period } from "../port/source.ts";
 import { DAY_MS, parseJSTDate } from "./date.ts";
 
-export const SUPPORTED_PROVIDER_IDS = ["jcb", "amazon", "moneyforward"] as const;
+export const SUPPORTED_PROVIDER_IDS = ["jcb", "amazon", "moneyforward", "yucho-debit"] as const;
 export type SupportedProviderID = (typeof SUPPORTED_PROVIDER_IDS)[number];
 
 export interface FetchArguments<Provider extends SupportedProviderID = SupportedProviderID> {
@@ -28,6 +28,10 @@ export function parseJCBFetchArguments(args: string[]): FetchArguments<"jcb"> {
 
 export function parseAmazonFetchArguments(args: string[]): FetchArguments<"amazon"> {
   return parseFetchArguments(args, "amazon", "amazon");
+}
+
+export function parseYuchoDebitFetchArguments(args: string[]): FetchArguments<"yucho-debit"> {
+  return parseFetchArguments(args, "yucho-debit", "yucho-debit");
 }
 
 export function parseMoneyForwardFetchArguments(

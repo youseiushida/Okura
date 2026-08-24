@@ -3,6 +3,7 @@ import {
   parseAmazonFetchArguments,
   parseJCBFetchArguments,
   parseMoneyForwardFetchArguments,
+  parseYuchoDebitFetchArguments,
 } from "./arguments.ts";
 
 Deno.test("JCB fetch arguments use an inclusive JST range", () => {
@@ -53,6 +54,20 @@ Deno.test("Amazon fetch arguments use the default wallet and profile", () => {
   assertEquals(parsed.connection.id, "amazon/default");
   assertEquals(parsed.reauthenticate, true);
   assertEquals(parsed.saveCredentials, true);
+  assertEquals(parsed.period.from.toISOString(), "2026-07-31T15:00:00.000Z");
+  assertEquals(parsed.period.to.toISOString(), "2026-08-23T15:00:00.000Z");
+});
+
+Deno.test("Yucho Debit fetch arguments use its provider-scoped defaults", () => {
+  const parsed = parseYuchoDebitFetchArguments([
+    "--from",
+    "2026-08-01",
+    "--to",
+    "2026-08-23",
+  ]);
+
+  assertEquals(parsed.walletID, "yucho-debit");
+  assertEquals(parsed.connection.id, "yucho-debit/default");
   assertEquals(parsed.period.from.toISOString(), "2026-07-31T15:00:00.000Z");
   assertEquals(parsed.period.to.toISOString(), "2026-08-23T15:00:00.000Z");
 });

@@ -18,6 +18,10 @@ export async function runCLI(
     return 0;
   }
 
+  if (args[0] === "solver") {
+    return await runSolverCommand(args.slice(1), environment);
+  }
+
   const provider = args[0];
   if (!isSupportedProvider(provider)) {
     throw new TypeError(`unknown command\n\n${usage()}`);
@@ -31,6 +35,28 @@ export async function runCLI(
   }
   if (args[1] === "credentials" && args[2] === "remove") {
     return await removeCredentials(provider, args.slice(3), environment);
+  }
+  throw new TypeError(`unknown command\n\n${usage()}`);
+}
+
+async function runSolverCommand(
+  args: string[],
+  environment: CLIEnvironment,
+): Promise<number> {
+  if (args.length !== 2 || args[0] !== "2captcha") {
+    throw new TypeError(`unknown command\n\n${usage()}`);
+  }
+  const configuration = environment.createTwoCaptchaApiKeyConfiguration();
+  if (args[1] === "configure") {
+    const apiKey = await environment.askSecret("2Captcha API key: ");
+    await configuration.configure(apiKey);
+    environment.write("Saved the 2Captcha API key in the OS credential store.");
+    return 0;
+  }
+  if (args[1] === "remove") {
+    await configuration.remove();
+    environment.write("Removed the saved 2Captcha API key.");
+    return 0;
   }
   throw new TypeError(`unknown command\n\n${usage()}`);
 }

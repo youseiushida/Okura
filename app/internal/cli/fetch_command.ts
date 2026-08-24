@@ -5,12 +5,14 @@ import {
   parseAmazonFetchArguments,
   parseJCBFetchArguments,
   parseMoneyForwardFetchArguments,
+  parseYuchoDebitFetchArguments,
   type SupportedProviderID,
 } from "./arguments.ts";
 import {
   amazonCredentialInput,
   jcbCredentialInput,
   moneyForwardCredentialInput,
+  yuchoDebitCredentialInput,
 } from "./credentials.ts";
 import { createAuthInteraction, reportAuthentication } from "./interaction.ts";
 import { presentCashOuts, presentFinancialSnapshot } from "./presenter.ts";
@@ -22,6 +24,7 @@ const fetchCommands: Record<SupportedProviderID, FetchCommand> = {
   jcb: runJCBFetch,
   amazon: runAmazonFetch,
   moneyforward: runMoneyForwardFetch,
+  "yucho-debit": runYuchoDebitFetch,
 };
 
 export function runFetchCommand(
@@ -48,6 +51,16 @@ async function runAmazonFetch(args: string[], environment: CLIEnvironment): Prom
     environment.createAmazonFetch(options.connection, options.walletID),
     options,
     amazonCredentialInput(environment),
+    environment,
+  );
+}
+
+async function runYuchoDebitFetch(args: string[], environment: CLIEnvironment): Promise<number> {
+  const options = parseYuchoDebitFetchArguments(args);
+  return await runCashOutFetch(
+    environment.createYuchoDebitFetch(options.connection, options.walletID),
+    options,
+    yuchoDebitCredentialInput(environment),
     environment,
   );
 }

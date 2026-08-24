@@ -1,5 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert/";
-import { readBytesLimited } from "./body.ts";
+import { readBytesLimited, readTextLimitedWithCharset } from "./body.ts";
 
 Deno.test("readBytesLimited cancels a streamed response at the size limit", async () => {
   let canceled = false;
@@ -42,4 +42,53 @@ Deno.test("readBytesLimited rejects Content-Length before pulling the body", asy
   await assertRejects(() => readBytesLimited(response, 5), Error, "exceeds 5 bytes");
   assertEquals(pulled, false);
   assertEquals(canceled, true);
+});
+
+Deno.test("readTextLimitedWithCharset decodes the declared legacy HTML charset", async () => {
+  const response = new Response(
+    new Uint8Array([0x83, 0x8d, 0x83, 0x4f, 0x83, 0x43, 0x83, 0x93]),
+    { headers: { "Content-Type": "text/html;charset=Windows-31J" } },
+  );
+  assertEquals(await readTextLimitedWithCharset(response, 100), "ログイン");
+});
+
+Deno.test("readTextLimitedWithCharset rejects malformed legacy-charset bytes", async () => {
+  const response = new Response(
+    new Uint8Array([0x82]),
+    { headers: { "Content-Type": "text/html;charset=Windows-31J" } },
+  );
+  let decodeErrorCalled = false;
+
+  await assertRejects(
+    () =>
+      readTextLimitedWithCharset(
+        response,
+        100,
+        undefined,
+        (charset, cause) => {
+          decodeErrorCalled = true;
+          return new TypeError(`cannot decode ${charset}`, { cause });
+        },
+      ),
+    TypeError,
+    "Windows-31J",
+  );
+  assertEquals(decodeErrorCalled, true);
+});
+
+Deno.test("readTextLimitedWithCharset reports unsupported charsets through its error factory", async () => {
+  const response = new Response("body", {
+    headers: { "Content-Type": "text/html;charset=not-a-real-charset" },
+  });
+  await assertRejects(
+    () =>
+      readTextLimitedWithCharset(
+        response,
+        100,
+        undefined,
+        (charset, cause) => new TypeError(`cannot decode ${charset}`, { cause }),
+      ),
+    TypeError,
+    "not-a-real-charset",
+  );
 });

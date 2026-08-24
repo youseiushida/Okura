@@ -7,21 +7,25 @@ import type { CLIIO } from "./runtime.ts";
 export function jcbCredentialInput(
   io: CLIIO,
 ): CredentialInput<"jcb", UserIDPasswordCredentials> {
-  return {
-    readEnvironment: async (options) => {
-      const userID = nonEmptyEnvironment(io.getEnv("JCB_USER_ID"));
-      const password = nonEmptyEnvironment(io.getEnv("JCB_PASSWORD"), false);
-      if (userID === undefined && password === undefined) return undefined;
-      return await readJCB(io, { userID, password }, options);
-    },
-    prompt: (options) => readJCB(io, {}, options),
-    fromStored: (credential) => ({
-      userID: credential.identifier,
-      password: credential.password,
-    }),
-    toStored: (key, credential) =>
-      storedPasswordCredential(key, credential.userID, credential.password),
-  };
+  return userIDPasswordInput(io, "jcb", {
+    userIDEnvironmentVariable: "JCB_USER_ID",
+    passwordEnvironmentVariable: "JCB_PASSWORD",
+    userIDPrompt: "MyJCB user ID:",
+    passwordPrompt: "MyJCB password: ",
+    displayName: "MyJCB",
+  });
+}
+
+export function yuchoDebitCredentialInput(
+  io: CLIIO,
+): CredentialInput<"yucho-debit", UserIDPasswordCredentials> {
+  return userIDPasswordInput(io, "yucho-debit", {
+    userIDEnvironmentVariable: "YUCHO_DEBIT_USER_ID",
+    passwordEnvironmentVariable: "YUCHO_DEBIT_PASSWORD",
+    userIDPrompt: "Yucho Debit user ID:",
+    passwordPrompt: "Yucho Debit password: ",
+    displayName: "Yucho Debit",
+  });
 }
 
 export function amazonCredentialInput(
@@ -56,6 +60,36 @@ interface EmailPasswordPolicy {
   readonly displayName: string;
 }
 
+interface UserIDPasswordPolicy {
+  readonly userIDEnvironmentVariable: string;
+  readonly passwordEnvironmentVariable: string;
+  readonly userIDPrompt: string;
+  readonly passwordPrompt: string;
+  readonly displayName: string;
+}
+
+function userIDPasswordInput<Provider extends "jcb" | "yucho-debit">(
+  io: CLIIO,
+  _provider: Provider,
+  policy: UserIDPasswordPolicy,
+): CredentialInput<Provider, UserIDPasswordCredentials> {
+  return {
+    readEnvironment: async (options) => {
+      const userID = nonEmptyEnvironment(io.getEnv(policy.userIDEnvironmentVariable));
+      const password = nonEmptyEnvironment(io.getEnv(policy.passwordEnvironmentVariable), false);
+      if (userID === undefined && password === undefined) return undefined;
+      return await readUserIDPassword(io, policy, { userID, password }, options);
+    },
+    prompt: (options) => readUserIDPassword(io, policy, {}, options),
+    fromStored: (credential: StoredPasswordCredential<Provider>) => ({
+      userID: credential.identifier,
+      password: credential.password,
+    }),
+    toStored: (key, credential) =>
+      storedPasswordCredential(key, credential.userID, credential.password),
+  };
+}
+
 function emailPasswordInput<Provider extends "amazon" | "moneyforward">(
   io: CLIIO,
   _provider: Provider,
@@ -78,18 +112,19 @@ function emailPasswordInput<Provider extends "amazon" | "moneyforward">(
   };
 }
 
-async function readJCB(
+async function readUserIDPassword(
   io: CLIIO,
+  policy: UserIDPasswordPolicy,
   supplied: Partial<UserIDPasswordCredentials>,
   options: AuthenticationOptions = {},
 ): Promise<UserIDPasswordCredentials> {
   options.signal?.throwIfAborted();
-  const userID = supplied.userID ?? (await io.askText("MyJCB user ID:")).trim();
+  const userID = supplied.userID ?? (await io.askText(policy.userIDPrompt)).trim();
   options.signal?.throwIfAborted();
-  const password = supplied.password ?? await io.askSecret("MyJCB password: ");
+  const password = supplied.password ?? await io.askSecret(policy.passwordPrompt);
   options.signal?.throwIfAborted();
-  if (userID === "") throw new TypeError("MyJCB user ID is required");
-  if (password === "") throw new TypeError("MyJCB password is required");
+  if (userID === "") throw new TypeError(`${policy.displayName} user ID is required`);
+  if (password === "") throw new TypeError(`${policy.displayName} password is required`);
   return { userID, password };
 }
 

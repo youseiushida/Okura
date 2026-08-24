@@ -1,20 +1,30 @@
 import { FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
+import { ConfigureExternalServiceSecret } from "../application/external_service_secret.ts";
 import { createAmazonModule } from "../adapter/amazon/module.ts";
 import { createJCBModule } from "../adapter/jcb/module.ts";
 import { createMoneyForwardModule } from "../adapter/moneyforward/module.ts";
+import { TwoCaptchaTurnstileSolver } from "../adapter/turnstile/two_captcha.ts";
+import { TwoCaptchaApiKey } from "../adapter/turnstile/two_captcha_api_key.ts";
+import { createYuchoDebitModule } from "../adapter/yuchodebit/module.ts";
 import { KeyringCredentialVault } from "../adapter/credential/keyring_vault.ts";
 import { createDefaultSecretStore } from "../adapter/keyring/os_keyring.ts";
 import { createDefaultSessionVault } from "../adapter/session/default_vault.ts";
 import type { CLIEnvironment } from "./runtime.ts";
 
+const getEnvironment = (name: string): string | undefined => Deno.env.get(name);
+
 export const defaultEnvironment: CLIEnvironment = {
-  getEnv: (name) => Deno.env.get(name),
+  getEnv: getEnvironment,
   askText: (message) => Promise.resolve(globalThis.prompt(message) ?? ""),
   askSecret: readHiddenLine,
   write: (message) => console.log(message),
   warn: (message) => console.warn(message),
   createSessionVault: () => createDefaultSessionVault(createDefaultSecretStore()),
   createCredentialVault: () => new KeyringCredentialVault(createDefaultSecretStore()),
+  createTwoCaptchaApiKeyConfiguration: () =>
+    new ConfigureExternalServiceSecret(
+      new TwoCaptchaApiKey(createDefaultSecretStore(), getEnvironment),
+    ),
   createJCBFetch: (connection, walletID) => {
     const module = createJCBModule({ connection, walletID });
     return new FetchCashOuts({
@@ -26,6 +36,22 @@ export const defaultEnvironment: CLIEnvironment = {
   },
   createAmazonFetch: (connection, walletID) => {
     const module = createAmazonModule({ connection, walletID });
+    return new FetchCashOuts({
+      authentication: module.auth,
+      sessionVault: createDefaultSessionVault(createDefaultSecretStore()),
+      credentialVault: new KeyringCredentialVault(createDefaultSecretStore()),
+      cashOuts: module.sources.cashOuts,
+    });
+  },
+  createYuchoDebitFetch: (connection, walletID) => {
+    const apiKey = new TwoCaptchaApiKey(createDefaultSecretStore(), getEnvironment);
+    const module = createYuchoDebitModule({
+      connection,
+      walletID,
+      solver: new TwoCaptchaTurnstileSolver({
+        apiKey: (options) => apiKey.resolve(options),
+      }),
+    });
     return new FetchCashOuts({
       authentication: module.auth,
       sessionVault: createDefaultSessionVault(createDefaultSecretStore()),

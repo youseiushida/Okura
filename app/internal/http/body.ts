@@ -1,4 +1,5 @@
 export type SizeLimitErrorFactory = (limit: number) => Error;
+export type CharsetDecodeErrorFactory = (charset: string, cause: unknown) => Error;
 
 export async function readBytesLimited(
   response: Response,
@@ -48,6 +49,23 @@ export async function readTextLimited(
   createError?: SizeLimitErrorFactory,
 ): Promise<string> {
   return new TextDecoder().decode(await readBytesLimited(response, limit, createError));
+}
+
+export async function readTextLimitedWithCharset(
+  response: Response,
+  limit: number,
+  createError?: SizeLimitErrorFactory,
+  createDecodeError: CharsetDecodeErrorFactory = (charset, cause) =>
+    new Error(`decode response as ${charset}`, { cause }),
+): Promise<string> {
+  const bytes = await readBytesLimited(response, limit, createError);
+  const contentType = response.headers.get("Content-Type") ?? "";
+  const charset = contentType.match(/charset\s*=\s*["']?([^;"'\s]+)/i)?.[1] ?? "utf-8";
+  try {
+    return new TextDecoder(charset, { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw createDecodeError(charset, error);
+  }
 }
 
 export async function discardLimited(

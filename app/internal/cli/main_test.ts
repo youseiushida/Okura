@@ -1,5 +1,6 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert/";
 import { FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
+import type { ExternalServiceSecretConfigurationUseCase } from "../application/external_service_secret.ts";
 import { storedPasswordCredential } from "../application/credentials.ts";
 import { createProviderConnection } from "../model/connection.ts";
 import type { CashOut } from "../model/transaction.ts";
@@ -31,6 +32,11 @@ interface AmazonFakeCredentials {
 
 interface MoneyForwardFakeCredentials {
   readonly email: string;
+  readonly password: string;
+}
+
+interface YuchoDebitFakeCredentials {
+  readonly userID: string;
   readonly password: string;
 }
 
@@ -91,6 +97,34 @@ Deno.test("runCLI does not fetch when JCB credentials are missing", async () => 
   );
   assertEquals(fetched, false);
   assertEquals(auth.loginCount, 0);
+});
+
+Deno.test("runCLI obtains Yucho Debit credentials through its use case boundary", async () => {
+  const vault = new FakeSessionVault();
+  const auth = new FakeAuthentication<"yucho-debit", YuchoDebitFakeCredentials>("yucho-debit");
+  let loginCredentials: YuchoDebitFakeCredentials | undefined;
+  auth.loginHandler = (credentials) => {
+    loginCredentials = credentials;
+    return Promise.resolve();
+  };
+
+  const result = await runCLI(
+    ["yucho-debit", "fetch", "--from", "2026-08-01", "--to", "2026-08-23"],
+    testEnvironment({
+      getEnv: (name) => {
+        if (name === "YUCHO_DEBIT_USER_ID") return "yucho-user";
+        if (name === "YUCHO_DEBIT_PASSWORD") return "yucho-password";
+        return undefined;
+      },
+      askText: () => Promise.reject(new Error("prompt not expected")),
+      askSecret: () => Promise.reject(new Error("prompt not expected")),
+      createYuchoDebitFetch: () => yuchoDebitFetch(auth, vault, []),
+    }),
+  );
+
+  assertEquals(result, 0);
+  assertEquals(loginCredentials, { userID: "yucho-user", password: "yucho-password" });
+  assertEquals(vault.saved?.provider, "yucho-debit");
 });
 
 Deno.test("runCLI obtains Amazon credentials and OTP through the central interaction", async () => {
@@ -320,6 +354,49 @@ Deno.test("runCLI removes only credentials for the selected connection", async (
   assertStringIncludes(writes.join("\n"), "saved session was retained");
 });
 
+Deno.test("runCLI explicitly saves a hidden 2Captcha API key without printing it", async () => {
+  const apiKey = "a".repeat(32);
+  const writes: string[] = [];
+  let prompt = "";
+  const configuration = new FakeExternalServiceSecretConfiguration();
+
+  const result = await runCLI(
+    ["solver", "2captcha", "configure"],
+    testEnvironment({
+      askSecret: (message) => {
+        prompt = message;
+        return Promise.resolve(apiKey);
+      },
+      write: (message) => writes.push(message),
+      createTwoCaptchaApiKeyConfiguration: () => configuration,
+    }),
+  );
+
+  assertEquals(result, 0);
+  assertStringIncludes(prompt, "2Captcha");
+  assertEquals(configuration.configured, apiKey);
+  assertEquals(writes.join("\n").includes(apiKey), false);
+  assertStringIncludes(writes.join("\n"), "OS credential store");
+});
+
+Deno.test("runCLI removes the shared 2Captcha API key without prompting", async () => {
+  const writes: string[] = [];
+  const configuration = new FakeExternalServiceSecretConfiguration();
+
+  const result = await runCLI(
+    ["solver", "2captcha", "remove"],
+    testEnvironment({
+      askSecret: () => Promise.reject(new Error("prompt not expected")),
+      write: (message) => writes.push(message),
+      createTwoCaptchaApiKeyConfiguration: () => configuration,
+    }),
+  );
+
+  assertEquals(result, 0);
+  assertEquals(configuration.removeCount, 1);
+  assertStringIncludes(writes.join("\n"), "Removed");
+});
+
 Deno.test("runCLI fetches Money Forward assets, incomes, expenses, and email OTP", async () => {
   const writes: string[] = [];
   const vault = new FakeSessionVault();
@@ -395,17 +472,38 @@ function testEnvironment(overrides: Partial<CLIEnvironment>): CLIEnvironment {
     warn: () => {},
     createSessionVault: () => new FakeSessionVault(),
     createCredentialVault: () => new FakeCredentialVault(),
+    createTwoCaptchaApiKeyConfiguration: () => {
+      throw new Error("unexpected 2Captcha API key configuration creation");
+    },
     createJCBFetch: () => {
       throw new Error("unexpected JCB fetch use case creation");
     },
     createAmazonFetch: () => {
       throw new Error("unexpected Amazon fetch use case creation");
     },
+    createYuchoDebitFetch: () => {
+      throw new Error("unexpected Yucho Debit fetch use case creation");
+    },
     createMoneyForwardFetch: () => {
       throw new Error("unexpected Money Forward fetch use case creation");
     },
     ...overrides,
   };
+}
+
+class FakeExternalServiceSecretConfiguration implements ExternalServiceSecretConfigurationUseCase {
+  configured?: string;
+  removeCount = 0;
+
+  configure(secret: string): Promise<void> {
+    this.configured = secret;
+    return Promise.resolve();
+  }
+
+  remove(): Promise<void> {
+    this.removeCount += 1;
+    return Promise.resolve();
+  }
 }
 
 function jcbFetch(
@@ -428,6 +526,20 @@ function amazonFetch(
   cashOuts: CashOut[],
   credentialVault = new FakeCredentialVault(),
 ): FetchCashOuts<"amazon", AmazonFakeCredentials> {
+  return new FetchCashOuts({
+    authentication: auth,
+    sessionVault: vault,
+    credentialVault,
+    cashOuts: { fetchCashOuts: () => Promise.resolve(cashOuts) },
+  });
+}
+
+function yuchoDebitFetch(
+  auth: FakeAuthentication<"yucho-debit", YuchoDebitFakeCredentials>,
+  vault: FakeSessionVault,
+  cashOuts: CashOut[],
+  credentialVault = new FakeCredentialVault(),
+): FetchCashOuts<"yucho-debit", YuchoDebitFakeCredentials> {
   return new FetchCashOuts({
     authentication: auth,
     sessionVault: vault,
