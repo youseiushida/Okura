@@ -1,4 +1,8 @@
-import type { CashOutFetchResult, FinancialSnapshotFetchResult } from "../application/fetch.ts";
+import type {
+  CashFlowFetchResult,
+  CashOutFetchResult,
+  FinancialSnapshotFetchResult,
+} from "../application/fetch.ts";
 import type { Wallet } from "../model/account.ts";
 import { formatJSTDate } from "./date.ts";
 
@@ -56,6 +60,63 @@ function amazonItemTitles(metadata: Readonly<Record<string, string>>): string {
   return itemTitles === undefined || itemTitles === ""
     ? "（商品名を取得できませんでした）"
     : itemTitles;
+}
+
+export function presentCashFlow(
+  result: CashFlowFetchResult,
+  options: PresentationOptions,
+): string {
+  const totalCashInAmount = sum(result.cashIns.map((cashIn) => cashIn.amount));
+  const totalCashOutAmount = sum(result.cashOuts.map((cashOut) => cashOut.amount));
+  if (options.format === "json") {
+    return JSON.stringify(
+      {
+        connection: result.connection,
+        period: options.periodLabels,
+        cashFlow: {
+          cashInCount: result.cashIns.length,
+          cashOutCount: result.cashOuts.length,
+          totalCashInAmount,
+          totalCashOutAmount,
+          cashIns: result.cashIns.map((cashIn) => ({
+            id: cashIn.id,
+            connectionID: cashIn.connectionID,
+            date: formatJSTDate(cashIn.occurredAt),
+            amount: cashIn.amount,
+            from: cashIn.from.name,
+            toWallet: serializeWallet(cashIn.to),
+            metadata: cashIn.from.metadata,
+          })),
+          cashOuts: result.cashOuts.map((cashOut) => ({
+            id: cashOut.id,
+            connectionID: cashOut.connectionID,
+            date: formatJSTDate(cashOut.occurredAt),
+            amount: cashOut.amount,
+            fromWallet: serializeWallet(cashOut.from),
+            to: cashOut.to.name,
+            metadata: cashOut.to.metadata,
+          })),
+        },
+      },
+      null,
+      2,
+    );
+  }
+
+  return [
+    `キャッシュフロー: ${options.periodLabels.from} 〜 ${options.periodLabels.to}`,
+    `入金: ${result.cashIns.length}件 ${formatJPY(totalCashInAmount)}  ` +
+    `出金: ${result.cashOuts.length}件 ${formatJPY(totalCashOutAmount)}`,
+    "種別\t日付\t金額\t内容\tウォレット",
+    ...result.cashIns.map((cashIn) =>
+      `入金\t${formatJSTDate(cashIn.occurredAt)}\t${formatJPY(cashIn.amount)}` +
+      `\t${cashIn.from.name}\t${cashIn.to.name}`
+    ),
+    ...result.cashOuts.map((cashOut) =>
+      `出金\t${formatJSTDate(cashOut.occurredAt)}\t${formatJPY(cashOut.amount)}` +
+      `\t${cashOut.to.name}\t${cashOut.from.name}`
+    ),
+  ].join("\n");
 }
 
 export function presentFinancialSnapshot(

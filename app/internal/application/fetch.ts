@@ -10,6 +10,7 @@ import type { ProviderID } from "../port/provider.ts";
 import type { SessionVaultPort } from "../port/session_vault.ts";
 import type {
   AssetBalanceSource,
+  CashFlowSource,
   CashInSource,
   CashOutSource,
   Period,
@@ -29,6 +30,17 @@ export interface CashOutFetchResult<Provider extends ProviderID = ProviderID> {
   readonly connection: ProviderConnection<Provider>;
   readonly authentication: EnsureAuthenticationResult;
   readonly cashOuts: CashOut[];
+}
+
+export interface CashFlowSnapshot {
+  readonly cashIns: CashIn[];
+  readonly cashOuts: CashOut[];
+}
+
+export interface CashFlowFetchResult<Provider extends ProviderID = ProviderID>
+  extends CashFlowSnapshot {
+  readonly connection: ProviderConnection<Provider>;
+  readonly authentication: EnsureAuthenticationResult;
 }
 
 export interface FinancialSnapshot {
@@ -51,6 +63,13 @@ export interface CashOutFetchUseCase<
   execute(request: FetchRequest<Credentials, Provider>): Promise<CashOutFetchResult<Provider>>;
 }
 
+export interface CashFlowFetchUseCase<
+  Credentials,
+  Provider extends ProviderID = ProviderID,
+> {
+  execute(request: FetchRequest<Credentials, Provider>): Promise<CashFlowFetchResult<Provider>>;
+}
+
 export interface FinancialSnapshotFetchUseCase<
   Credentials,
   Provider extends ProviderID = ProviderID,
@@ -69,6 +88,11 @@ interface AuthenticatedDependencies<Provider extends ProviderID, Credentials> {
 interface CashOutDependencies<Provider extends ProviderID, Credentials>
   extends AuthenticatedDependencies<Provider, Credentials> {
   readonly cashOuts: CashOutSource;
+}
+
+interface CashFlowDependencies<Provider extends ProviderID, Credentials>
+  extends AuthenticatedDependencies<Provider, Credentials> {
+  readonly cashFlows: CashFlowSource;
 }
 
 interface FinancialSnapshotDependencies<Provider extends ProviderID, Credentials>
@@ -100,6 +124,34 @@ export class FetchCashOuts<Provider extends ProviderID, Credentials>
       connection: this.#dependencies.authentication.connection,
       authentication,
       cashOuts,
+    };
+  }
+}
+
+export class FetchCashFlows<Provider extends ProviderID, Credentials>
+  implements CashFlowFetchUseCase<Credentials, Provider> {
+  readonly #dependencies: CashFlowDependencies<Provider, Credentials>;
+
+  constructor(dependencies: CashFlowDependencies<Provider, Credentials>) {
+    this.#dependencies = dependencies;
+  }
+
+  async execute(
+    request: FetchRequest<Credentials, Provider>,
+  ): Promise<CashFlowFetchResult<Provider>> {
+    const authentication = await authenticate(this.#dependencies, request);
+    const cashFlow = await this.#dependencies.cashFlows.fetchCashFlows(request.period, {
+      signal: request.signal,
+    });
+    assertCashFlowConnections(
+      cashFlow,
+      this.#dependencies.authentication.connection.id,
+    );
+
+    return {
+      connection: this.#dependencies.authentication.connection,
+      authentication,
+      ...cashFlow,
     };
   }
 }
@@ -172,6 +224,19 @@ function assertCashOutConnections(cashOuts: CashOut[], connectionID: string): vo
   }
 }
 
+function assertCashInConnections(cashIns: CashIn[], connectionID: string): void {
+  for (const cashIn of cashIns) {
+    if (cashIn.connectionID !== connectionID || cashIn.to.connectionID !== connectionID) {
+      throw new TypeError("cash-in belongs to another connection");
+    }
+  }
+}
+
+function assertCashFlowConnections(cashFlow: CashFlowSnapshot, connectionID: string): void {
+  assertCashInConnections(cashFlow.cashIns, connectionID);
+  assertCashOutConnections(cashFlow.cashOuts, connectionID);
+}
+
 function assertFinancialSnapshotConnections(
   snapshot: FinancialSnapshot,
   connectionID: string,
@@ -181,12 +246,7 @@ function assertFinancialSnapshotConnections(
       throw new TypeError("asset balance belongs to another connection");
     }
   }
-  for (const cashIn of snapshot.cashIns) {
-    if (cashIn.connectionID !== connectionID || cashIn.to.connectionID !== connectionID) {
-      throw new TypeError("cash-in belongs to another connection");
-    }
-  }
-  assertCashOutConnections(snapshot.cashOuts, connectionID);
+  assertCashFlowConnections(snapshot, connectionID);
   for (const transfer of snapshot.transfers) {
     if (
       transfer.connectionID !== connectionID ||

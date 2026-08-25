@@ -14,9 +14,15 @@ import { JCBAuthentication } from "./authentication.ts";
 import { MYPAGE_PATH } from "./login.ts";
 import { PeriodUnavailableError, UnauthenticatedError } from "./errors.ts";
 import { parseStatement, statementSequences } from "./parser.ts";
-import { jstDate, startTestServer, statementHTML } from "./test_util.ts";
+import {
+  jstDate,
+  startTestServer,
+  statementHTML,
+  statementHTMLWithDifferences,
+} from "./test_util.ts";
 
-Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async () => {
+Deno.test("JCBAdapter.fetchCashFlows maps settled and difference refunds", async () => {
+  // Minimized from the observed MyJCB table shapes. All transaction values are synthetic.
   const requestedSequences: string[] = [];
   let menuRequests = 0;
   let serverURL = "";
@@ -35,9 +41,16 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
       `${serverURL}${DETAIL_MENU_PATH}?link_id=${DETAIL_MENU_LINK_ID}`,
     );
     return new Response(
-      statementHTML(
-        ["1234", "2026/06/16", "ACME &amp; STORE", "1,234", "海外利用", "654321"],
-        ["1234", "2026/07/16", "OUT OF PERIOD", "999", "", "111111"],
+      statementHTMLWithDifferences(
+        [
+          ["1234", "2026/06/16", "ACME &amp; STORE", "1,234", "海外利用", "654321"],
+          ["1234", "2026/06/17", "RETURNED STORE", "-500", "", "654322"],
+          ["1234", "2026/07/16", "OUT OF PERIOD", "999", "", "111111"],
+        ],
+        [
+          ["1234", "2026/06/18", "ADJUSTED STORE", "250", "", "銀行振替済", "654323"],
+          ["1234", "2026/06/19", "DIFFERENCE RETURN", "-100", "", "銀行振替済", "654324"],
+        ],
       ),
       { headers: { "Content-Type": "text/html; charset=UTF-8" } },
     );
@@ -51,14 +64,15 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
       wallet: createWallet(context.connection, "wallet-jcb", "My JCB"),
       now: () => jstDate(2026, 8, 22, 12),
     });
-    const cashOuts = await adapter.fetchCashOuts({
+    const result = await adapter.fetchCashFlows({
       from: jstDate(2026, 6, 16),
       to: jstDate(2026, 7, 16),
     });
     assertEquals(menuRequests, 1);
     assertEquals(requestedSequences, ["2"]);
-    assertEquals(cashOuts.length, 1);
-    const cashOut = cashOuts[0];
+    assertEquals(result.cashOuts.length, 2);
+    assertEquals(result.cashIns.length, 2);
+    const cashOut = result.cashOuts[0];
     assert(cashOut !== undefined);
     assertEquals(cashOut.amount, 1234);
     assertEquals(cashOut.from.name, "My JCB");
@@ -66,12 +80,19 @@ Deno.test("JCBAdapter.fetchCashOuts fetches the matching statement cycle", async
     assertEquals(cashOut.to.metadata.approval_number, "654321");
     assertEquals(cashOut.to.metadata.description, "海外利用");
     assertMatch(cashOut.id, /^jcb\/default:transaction:[0-9a-f]{64}$/);
+    assertEquals(result.cashOuts[1]?.amount, 250);
+    assertEquals(result.cashOuts[1]?.to.metadata.statement_section, "difference");
+    assertEquals(result.cashOuts[1]?.to.metadata.status, "銀行振替済");
+    assertEquals(result.cashIns[0]?.amount, 500);
+    assertEquals(result.cashIns[0]?.from.name, "RETURNED STORE");
+    assertEquals(result.cashIns[1]?.amount, 100);
+    assertEquals(result.cashIns[1]?.from.metadata.statement_section, "difference");
   } finally {
     await server.close();
   }
 });
 
-Deno.test("JCBAdapter.fetchCashOuts detects a login redirect", async () => {
+Deno.test("JCBAdapter.fetchCashFlows detects a login redirect", async () => {
   const server = startTestServer((request) => {
     if (new URL(request.url).pathname === "/Login") return new Response("login");
     return Response.redirect(new URL("/Login", request.url), 302);
@@ -84,7 +105,7 @@ Deno.test("JCBAdapter.fetchCashOuts detects a login redirect", async () => {
       now: () => jstDate(2026, 8, 22, 12),
     });
     const error = await assertRejects(() =>
-      adapter.fetchCashOuts({
+      adapter.fetchCashFlows({
         from: jstDate(2026, 8, 16),
         to: jstDate(2026, 8, 17),
       })
@@ -113,7 +134,7 @@ Deno.test("JCBAdapter does not expire a session on an ambiguous 403", async () =
   });
 
   await assertRejects(() =>
-    adapter.fetchCashOuts({
+    adapter.fetchCashFlows({
       from: jstDate(2026, 8, 16),
       to: jstDate(2026, 8, 17),
     })
@@ -137,7 +158,7 @@ Deno.test("JCBAdapter preserves AbortSignal reason", async () => {
     now: () => jstDate(2026, 8, 22, 12),
   });
   const error = await assertRejects(() =>
-    adapter.fetchCashOuts(
+    adapter.fetchCashFlows(
       { from: jstDate(2026, 8, 16), to: jstDate(2026, 8, 17) },
       { signal: controller.signal },
     )
@@ -168,15 +189,16 @@ Deno.test("statementSequences validates the available 15 cycles", () => {
     }, now), PeriodUnavailableError);
 });
 
-Deno.test("parseStatement skips refunds and keeps duplicate IDs unique", () => {
+Deno.test("parseStatement preserves observed signed refunds and duplicate IDs", () => {
   const parsed = parseStatement(statementHTML(
-    ["1234", "２０２６／０６／１６", "SHOP", "１，０００円", "", "123456"],
-    ["1234", "２０２６／０６／１６", "SHOP", "１，０００円", "", "123456"],
-    ["1234", "2026/06/17", "REFUND", "△500", "", "654321"],
+    ["1234", "2026/06/16", "SHOP", "1,000", "", "123456"],
+    ["1234", "2026/06/16", "SHOP", "1,000", "", "123456"],
+    ["1234", "2026/06/17", "REFUND", "-500", "", "654321"],
   ));
   assert(parsed.found);
-  assertEquals(parsed.rows.length, 2);
+  assertEquals(parsed.rows.length, 3);
   assertEquals(parsed.rows[0]?.amount, 1000);
+  assertEquals(parsed.rows[2]?.amount, -500);
   assertNotEquals(parsed.rows[0]?.id, parsed.rows[1]?.id);
 });
 

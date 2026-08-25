@@ -28,13 +28,42 @@ export function jstDate(year: number, month: number, day: number, hour = 0): Dat
 }
 
 export function statementHTML(...rows: string[][]): string {
-  const headers = ["ご利用者", "お振替日", "ご利用先など", "お振替金額", "摘要", "承認番号"];
+  return statementHTMLWithDifferences(rows, []);
+}
+
+export function statementHTMLWithDifferences(
+  settledRows: string[][],
+  differenceRows: string[][],
+): string {
+  const settledHeaders = [
+    "ご利用者",
+    "お振替日",
+    "ご利用先など",
+    "お振替金額",
+    "摘要",
+    "承認番号",
+  ];
+  const differenceHeaders = [
+    "ご利用者",
+    "差額発生日",
+    "ご利用先など",
+    "差額",
+    "摘要",
+    "お取引結果",
+    "承認番号",
+  ];
   return `<html><body><table class="unrelated"></table>` +
-    `<table class="table_detail02 usage_detail-table01"><thead><tr>` +
+    statementTable(settledHeaders, settledRows) +
+    statementTable(differenceHeaders, differenceRows) +
+    `</body></html>`;
+}
+
+function statementTable(headers: string[], rows: string[][]): string {
+  return `<table class="table_detail02 usage_detail-table01"><thead><tr>` +
     headers.map((header) => `<th>${header}</th>`).join("") +
     `</tr></thead><tbody>` +
     rows.map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join("")}</tr>`).join("") +
-    `</tbody></table></body></html>`;
+    `</tbody></table>`;
 }
 
 export function authenticatedMypageHTML(): string {

@@ -15,6 +15,18 @@ export function jcbCashOut(profile = "default"): CashOut {
   };
 }
 
+export function jcbCashIn(profile = "default"): CashIn {
+  const connection = createProviderConnection("jcb", profile);
+  return {
+    id: `${connection.id}:transaction:${"b".repeat(64)}`,
+    connectionID: connection.id,
+    amount: 500,
+    occurredAt: new Date("2026-06-18T15:00:00.000Z"),
+    from: { name: "RETURNED STORE", metadata: { source: "jcb" } },
+    to: createWallet(connection, "wallet-jcb", "wallet-jcb"),
+  };
+}
+
 export function amazonCashOut(profile = "default"): CashOut {
   const connection = createProviderConnection("amazon", profile);
   return {

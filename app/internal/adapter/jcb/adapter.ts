@@ -1,11 +1,17 @@
 import type { Wallet } from "../../model/account.ts";
 import { rethrowAbort } from "../../error/abort.ts";
-import type { CashOut } from "../../model/transaction.ts";
-import type { CashOutSource, FetchOptions, Period } from "../../port/source.ts";
+import type { CashIn, CashOut } from "../../model/transaction.ts";
+import type { CashFlowSource, FetchOptions, Period } from "../../port/source.ts";
 import { JCBError, UnauthenticatedError, UnexpectedPageError } from "./errors.ts";
 import { readJCBHTML } from "./html.ts";
 import { MYPAGE_PATH } from "./login.ts";
-import { parseStatement, statementRowToCashOut, statementSequences } from "./parser.ts";
+import {
+  isCompletedStatementRow,
+  parseStatement,
+  statementRowToCashIn,
+  statementRowToCashOut,
+  statementSequences,
+} from "./parser.ts";
 import { DEFAULT_BASE_URL, type JCBContext, resolveJCBPath } from "./context.ts";
 
 export const DETAIL_PATH = "/iss-pc/member/debit/details/debitDetail.html";
@@ -17,7 +23,7 @@ export interface Config {
   readonly now?: () => Date;
 }
 
-export class JCBAdapter implements CashOutSource {
+export class JCBAdapter implements CashFlowSource {
   readonly #context: JCBContext;
   readonly wallet: Wallet;
   readonly now: () => Date;
@@ -32,10 +38,13 @@ export class JCBAdapter implements CashOutSource {
     this.now = config.now ?? (() => new Date());
   }
 
-  async fetchCashOuts(period: Period, options: FetchOptions = {}): Promise<CashOut[]> {
+  async fetchCashFlows(
+    period: Period,
+    options: FetchOptions = {},
+  ): Promise<{ readonly cashIns: CashIn[]; readonly cashOuts: CashOut[] }> {
     if (this.#context.authenticationState !== "valid") throw new UnauthenticatedError();
     const sequences = statementSequences(period, this.now());
-    if (sequences.length === 0) return [];
+    if (sequences.length === 0) return { cashIns: [], cashOuts: [] };
     try {
       await this.#openStatementMenu(options.signal);
     } catch (error) {
@@ -43,7 +52,8 @@ export class JCBAdapter implements CashOutSource {
       if (error instanceof UnauthenticatedError) throw error;
       throw new JCBError(`open statement menu: ${errorMessage(error)}`, { cause: error });
     }
-    const cashOuts: CashOut[] = [];
+    const cashIns = new Map<string, CashIn>();
+    const cashOuts = new Map<string, CashOut>();
     for (const sequence of sequences) {
       let rows;
       try {
@@ -57,18 +67,25 @@ export class JCBAdapter implements CashOutSource {
       }
       for (const row of rows) {
         if (
+          !isCompletedStatementRow(row) ||
           row.occurredAt.getTime() < period.from.getTime() ||
           row.occurredAt.getTime() >= period.to.getTime()
         ) {
           continue;
         }
-        cashOuts.push(statementRowToCashOut(row, this.wallet));
+        if (row.amount < 0) {
+          const cashIn = statementRowToCashIn(row, this.wallet);
+          cashIns.set(cashIn.id, cashIn);
+        } else {
+          const cashOut = statementRowToCashOut(row, this.wallet);
+          cashOuts.set(cashOut.id, cashOut);
+        }
       }
     }
-    cashOuts.sort((left, right) =>
-      left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id)
-    );
-    return cashOuts;
+    return {
+      cashIns: sortedTransactions(cashIns.values()),
+      cashOuts: sortedTransactions(cashOuts.values()),
+    };
   }
 
   async #fetchStatement(sequence: number, signal?: AbortSignal) {
@@ -113,6 +130,14 @@ export class JCBAdapter implements CashOutSource {
     this.#context.authenticationState = "expired";
     throw new UnauthenticatedError();
   }
+}
+
+function sortedTransactions<Transaction extends CashIn | CashOut>(
+  values: Iterable<Transaction>,
+): Transaction[] {
+  return [...values].sort((left, right) =>
+    left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id)
+  );
 }
 
 export function isLoginResponse(response: Response): boolean {

@@ -1,4 +1,8 @@
-import type { CashOutFetchUseCase, FinancialSnapshotFetchUseCase } from "../application/fetch.ts";
+import type {
+  CashFlowFetchUseCase,
+  CashOutFetchUseCase,
+  FinancialSnapshotFetchUseCase,
+} from "../application/fetch.ts";
 import type { ExternalServiceSecretConfigurationUseCase } from "../application/external_service_secret.ts";
 import type { ProviderConnection } from "../model/connection.ts";
 import type { EmailPasswordCredentials, UserIDPasswordCredentials } from "../port/credentials.ts";
@@ -20,7 +24,7 @@ export interface CLIEnvironment extends CLIIO {
   createJCBFetch(
     connection: ProviderConnection<"jcb">,
     walletID: string,
-  ): CashOutFetchUseCase<UserIDPasswordCredentials, "jcb">;
+  ): CashFlowFetchUseCase<UserIDPasswordCredentials, "jcb">;
   createAmazonFetch(
     connection: ProviderConnection<"amazon">,
     walletID: string,

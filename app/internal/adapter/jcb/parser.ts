@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { parse } from "parse5";
-import type { CashOut } from "../../model/transaction.ts";
+import type { CashIn, CashOut } from "../../model/transaction.ts";
 import type { Wallet } from "../../model/account.ts";
 import { scopedID } from "../../model/connection.ts";
 import type { Period } from "../../port/source.ts";
@@ -8,7 +8,7 @@ import { PeriodUnavailableError, UnexpectedPageError } from "./errors.ts";
 
 const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 const STATEMENT_CYCLE_COUNT = 15;
-const REQUIRED_HEADERS = [
+const SETTLED_HEADERS = [
   "ご利用者",
   "お振替日",
   "ご利用先など",
@@ -16,6 +16,16 @@ const REQUIRED_HEADERS = [
   "摘要",
   "承認番号",
 ] as const;
+const DIFFERENCE_HEADERS = [
+  "ご利用者",
+  "差額発生日",
+  "ご利用先など",
+  "差額",
+  "摘要",
+  "お取引結果",
+  "承認番号",
+] as const;
+const COMPLETED_DIFFERENCE_STATUS = "銀行振替済";
 
 interface HtmlAttribute {
   name: string;
@@ -32,12 +42,14 @@ interface HtmlNode {
 
 export interface StatementRow {
   id: string;
+  kind: "settled" | "difference";
   user: string;
   occurredAt: Date;
   merchant: string;
   amount: number;
   description: string;
   approvalNumber: string;
+  status: string;
 }
 
 export type MypageStatus = "authenticated" | "expired" | "unexpected";
@@ -83,38 +95,62 @@ export function parseMypageStatus(html: string): MypageStatus {
 }
 
 export function statementRowToCashOut(row: StatementRow, wallet: Wallet): CashOut {
-  const metadata: Record<string, string> = { source: "jcb" };
-  addMetadata(metadata, "user", row.user);
-  addMetadata(metadata, "description", row.description);
-  addMetadata(metadata, "approval_number", row.approvalNumber);
+  if (row.amount <= 0) throw new TypeError("jcb: cash-out amount must be positive");
   return {
     id: scopedID(wallet.connectionID, "transaction", row.id),
     connectionID: wallet.connectionID,
     amount: row.amount,
     occurredAt: row.occurredAt,
     from: wallet,
-    to: { name: row.merchant, metadata },
+    to: { name: row.merchant, metadata: statementMetadata(row) },
+  };
+}
+
+export function statementRowToCashIn(row: StatementRow, wallet: Wallet): CashIn {
+  if (row.amount >= 0) throw new TypeError("jcb: cash-in amount must be negative on statement");
+  return {
+    id: scopedID(wallet.connectionID, "transaction", row.id),
+    connectionID: wallet.connectionID,
+    amount: -row.amount,
+    occurredAt: row.occurredAt,
+    from: { name: row.merchant, metadata: statementMetadata(row) },
+    to: wallet,
   };
 }
 
 export function parseStatement(html: string): { rows: StatementRow[]; found: boolean } {
   const document = parse(html) as unknown as HtmlNode;
-  const table = findTargetTable(document);
-  if (table === undefined) return { rows: [], found: false };
+  let foundSettled = false;
+  let foundDifference = false;
+  const rows: StatementRow[] = [];
 
-  const head = directChild(table, "thead");
-  const body = directChild(table, "tbody");
-  const headerRow = head === undefined ? undefined : directChildren(head, "tr")[0];
-  const headers = headerRow === undefined
-    ? []
-    : directChildren(headerRow, "th").map((cell) => normalizeText(textContent(cell)));
-  const rawRows = body === undefined
-    ? []
-    : directChildren(body, "tr").map((row) =>
-      directChildren(row, "td").map((cell) => normalizeText(textContent(cell)))
-    ).filter((row) => row.length > 0);
+  for (const table of findTargetTables(document)) {
+    const parsed = parseTable(table);
+    if (sameHeaders(parsed.headers, SETTLED_HEADERS)) {
+      if (foundSettled) throw new UnexpectedPageError("duplicate settled statement table");
+      foundSettled = true;
+      rows.push(...buildStatementRows(parsed.headers, parsed.rows, {
+        kind: "settled",
+        dateHeader: "お振替日",
+        amountHeader: "お振替金額",
+      }));
+      continue;
+    }
+    if (sameHeaders(parsed.headers, DIFFERENCE_HEADERS)) {
+      if (foundDifference) throw new UnexpectedPageError("duplicate difference statement table");
+      foundDifference = true;
+      rows.push(...buildStatementRows(parsed.headers, parsed.rows, {
+        kind: "difference",
+        dateHeader: "差額発生日",
+        amountHeader: "差額",
+        statusHeader: "お取引結果",
+      }));
+      continue;
+    }
+    throw new UnexpectedPageError("unrecognized statement table headers");
+  }
 
-  return { rows: buildStatementRows(headers, rawRows), found: true };
+  return { rows, found: foundSettled };
 }
 
 export function statementSequences(period: Period, now: Date): number[] {
@@ -155,14 +191,19 @@ export function cycleStart(at: Date): Date {
   return jstDate(year, month, 16);
 }
 
-function buildStatementRows(headers: string[], rawRows: string[][]): StatementRow[] {
-  const columns = new Map(headers.map((header, index) => [header, index]));
-  for (const header of REQUIRED_HEADERS) {
-    if (!columns.has(header)) {
-      throw new UnexpectedPageError(`missing ${JSON.stringify(header)} column`);
-    }
-  }
+interface StatementRowConfig {
+  readonly kind: StatementRow["kind"];
+  readonly dateHeader: string;
+  readonly amountHeader: string;
+  readonly statusHeader?: string;
+}
 
+function buildStatementRows(
+  headers: string[],
+  rawRows: string[][],
+  config: StatementRowConfig,
+): StatementRow[] {
+  const columns = new Map(headers.map((header, index) => [header, index]));
   const result: StatementRow[] = [];
   const occurrences = new Map<string, number>();
   for (const [rowIndex, cells] of rawRows.entries()) {
@@ -172,31 +213,40 @@ function buildStatementRows(headers: string[], rawRows: string[][]): StatementRo
       );
     }
     try {
-      const occurredAt = parseDate(cell(cells, columns, "お振替日"));
-      const amount = parseAmount(cell(cells, columns, "お振替金額"));
-      if (amount < 0) continue;
+      const occurredAt = parseDate(cell(cells, columns, config.dateHeader));
+      const amount = parseAmount(cell(cells, columns, config.amountHeader));
+      if (amount === 0) throw new TypeError("amount must not be zero");
       const user = cell(cells, columns, "ご利用者");
       const merchant = cell(cells, columns, "ご利用先など");
       const description = cell(cells, columns, "摘要");
       const approvalNumber = cell(cells, columns, "承認番号");
-      const fingerprint = [
+      const status = config.statusHeader === undefined
+        ? ""
+        : cell(cells, columns, config.statusHeader);
+      const identityParts = [
         formatJSTDate(occurredAt),
         user,
         merchant,
         String(amount),
         description,
         approvalNumber,
-      ].join("\0");
+      ];
+      if (config.kind === "difference") {
+        identityParts.unshift(config.kind);
+      }
+      const fingerprint = identityParts.join("\0");
       const ordinal = occurrences.get(fingerprint) ?? 0;
       occurrences.set(fingerprint, ordinal + 1);
       result.push({
         id: transactionID(fingerprint, ordinal),
+        kind: config.kind,
         user,
         occurredAt,
         merchant,
         amount,
         description,
         approvalNumber,
+        status,
       });
     } catch (error) {
       if (error instanceof UnexpectedPageError) throw error;
@@ -228,8 +278,7 @@ function parseAmount(value: string): number {
     .replaceAll(",", "")
     .replaceAll("，", "")
     .replaceAll("円", "")
-    .replaceAll(" ", "")
-    .replace(/[△▲]/g, "-");
+    .replaceAll(" ", "");
   if (normalized === "") throw new TypeError("amount is empty");
   if (!/^-?\d+$/.test(normalized)) throw new TypeError("unsupported amount format");
   const amount = Number(normalized);
@@ -251,16 +300,41 @@ function transactionID(fingerprint: string, ordinal: number): string {
   return createHash("sha256").update(`${fingerprint}\0${ordinal}`).digest("hex");
 }
 
-function findTargetTable(node: HtmlNode): HtmlNode | undefined {
+function findTargetTables(node: HtmlNode): HtmlNode[] {
+  const result: HtmlNode[] = [];
   if (node.tagName === "table") {
     const classes = new Set(attribute(node, "class").split(/\s+/).filter(Boolean));
-    if (classes.has("usage_detail-table01") && classes.has("table_detail02")) return node;
+    if (classes.has("usage_detail-table01") && classes.has("table_detail02")) {
+      result.push(node);
+    }
   }
   for (const child of node.childNodes ?? []) {
-    const result = findTargetTable(child);
-    if (result !== undefined) return result;
+    result.push(...findTargetTables(child));
   }
-  return undefined;
+  return result;
+}
+
+function parseTable(table: HtmlNode): { headers: string[]; rows: string[][] } {
+  const head = directChild(table, "thead");
+  const body = directChild(table, "tbody");
+  const headerRow = head === undefined ? undefined : directChildren(head, "tr")[0];
+  const headers = headerRow === undefined
+    ? []
+    : directChildren(headerRow, "th").map((cell) => normalizeText(textContent(cell)));
+  const rows = body === undefined
+    ? []
+    : directChildren(body, "tr").map((row) =>
+      directChildren(row, "td").map((cell) => normalizeText(textContent(cell)))
+    ).filter((row) => row.length > 0);
+  return { headers, rows };
+}
+
+function sameHeaders(
+  actual: string[],
+  expected: readonly string[],
+): boolean {
+  return actual.length === expected.length &&
+    actual.every((header, index) => header === expected[index]);
 }
 
 function visit(node: HtmlNode, callback: (node: HtmlNode) => void): void {
@@ -300,6 +374,22 @@ function cell(cells: string[], columns: Map<string, number>, header: string): st
 
 function addMetadata(metadata: Record<string, string>, key: string, value: string): void {
   if (value !== "") metadata[key] = value;
+}
+
+function statementMetadata(row: StatementRow): Record<string, string> {
+  const metadata: Record<string, string> = { source: "jcb" };
+  addMetadata(metadata, "user", row.user);
+  addMetadata(metadata, "description", row.description);
+  addMetadata(metadata, "approval_number", row.approvalNumber);
+  if (row.kind === "difference") {
+    metadata.statement_section = "difference";
+    addMetadata(metadata, "status", row.status);
+  }
+  return metadata;
+}
+
+export function isCompletedStatementRow(row: StatementRow): boolean {
+  return row.kind === "settled" || row.status === COMPLETED_DIFFERENCE_STATUS;
 }
 
 function addJSTMonths(value: Date, months: number): Date {

@@ -58,6 +58,40 @@ Composition Root ───┴──> Adapters ──────┘
 - `README.md` と公開ドキュメントは、ユーザーから明示的に依頼または承認された場合だけ変更する。
   コード変更によって記述が古くなる場合は、勝手に更新せず差異を報告する。
 
+## 根拠と仮説を分離する
+
+provider固有の実装では、入力を次の4種類に分ける。
+
+- 観測事実: 権限のある実サイトの匿名化済みresponse、HAR、HTML、API payloadで確認した事実。
+- 確認済み仕様: 公式文書またはユーザーが明示した、fieldや取引の意味と必要な挙動。
+- 設計判断: 観測事実と確認済み仕様をmodel、port、errorへ対応付ける判断。
+- 仮説: 類似provider、将来の可能性、命名、見た目、記憶だけから推定した未確認事項。
+
+通常のコードとtest suiteへ組み込めるのは、観測事実、確認済み仕様、および両者に基づく設計判断だけとする。
+仮説を実装や期待値へ入れ、testが通ることによって仕様へ昇格させてはいけない。
+
+- URL、method、redirect、selector、header、field、日付・金額・符号の表記、status、空ページ、
+  pagination、response variant、error分類などprovider固有の各分岐には根拠を必要とする。
+- repository、既存test、Git履歴、別providerの挙動は、外部サイトの現在の形式を証明する根拠ではない。
+- 公式文書で取引の意味を確認しても、HTMLのtag、class、列、記号などresponse形式を推定しない。
+- 実responseで形式を確認しても、金額・日付・statusの金融上の意味を見た目だけで推定しない。
+- 「ありそう」「一般的」「他社では同じ」を理由に、normalizer、fallback、selector、fixture、
+  error分類、互換処理を先回りで追加しない。
+- 必要な根拠がなく、推測によって認証、取得結果、資金移動、identityが変わる場合は作業を止める。
+  確認済みの事実、未確認事項、必要な最小のcaptureまたは仕様確認を報告し、判断を待つ。
+- 未知の200 responseやvariantは、都合よく既知形式へ補正したり空データとして扱ったりせず、
+  typed errorでfail closedする。
+
+testとfixtureでは次を守る。
+
+- provider固有fixtureは匿名化した実responseから作り、構造、列、記号、statusの表記を創作しない。
+  値を架空値へ置換または最小化した場合は、観測した構造由来であることをtest内に短く記録する。
+- synthetic testは、期間境界、connection invariant、stable IDなど確認済みのdomain契約にだけ使う。
+- 未確認variantを調べるexploratory testは通常suiteへcommitせず、調査完了後に削除する。
+- test名とassertionは確認済みの挙動だけを述べる。外部サイトを見ていないtestを
+  「実サイトfixture」「対応済みvariant」などと表現しない。
+- 実responseが仮説と異なった場合は、仮説由来のcode、test、dependency、permissionを残さない。
+
 ## 安定したディレクトリ境界
 
 ```text
@@ -276,7 +310,7 @@ provider追加によってCLIに認証手順、cookie処理、複数sourceの `P
 - 正常な実レスポンスを匿名化したfixture。
 - desktop/mobileなど既知variant。
 - 0件ページ。
-- cancel、refund、transfer、重複、複数請求などprovider固有の境界例。
+- 実responseまたは確認済み仕様で存在を確認したcancel、refund、transfer、重複、複数請求などの境界例。
 - 必須構造欠落、曖昧な金額、不正な日付・金額をfail closedする例。
 - stable ID、JST変換、connection ID、deterministic sort。
 
@@ -341,6 +375,7 @@ OS credential storeの検証は通常suiteから分離し、対応OS上で
 - parserはサイト変更を空データとして隠さずfail closedする。
 - response、pagination、Workerにresource上限とabort経路がある。
 - fixtureとerror messageに秘密情報や個人情報がない。
+- provider固有の分岐とfixtureが観測事実または確認済み仕様に基づき、仮説由来の期待値がない。
 - ユーザーが明示的に承認していないmigration、互換reader、fallback、dual write、
   旧dependency、追加permissionが含まれていない。
 - format、lint、型検査、全テストが成功する。

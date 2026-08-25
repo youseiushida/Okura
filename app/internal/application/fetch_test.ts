@@ -9,13 +9,14 @@ import {
   FakeSessionVault,
 } from "../testing/authentication.ts";
 import {
+  jcbCashIn,
   jcbCashOut,
   moneyForwardAssetBalance,
   moneyForwardCashIn,
   moneyForwardCashOut,
   moneyForwardTransfer,
 } from "../testing/financial.ts";
-import { FetchCashOuts, FetchFinancialSnapshot } from "./fetch.ts";
+import { FetchCashFlows, FetchCashOuts, FetchFinancialSnapshot } from "./fetch.ts";
 
 const interaction: AuthInteraction = {
   otp: { request: () => Promise.resolve({ action: "submit", code: "unused" }) },
@@ -32,6 +33,65 @@ Deno.test("FetchCashOuts rejects source data from another connection", async () 
     sessionVault: new FakeSessionVault(),
     credentialVault: new FakeCredentialVault(),
     cashOuts: { fetchCashOuts: () => Promise.resolve([jcbCashOut()]) },
+  });
+
+  await assertRejects(
+    () =>
+      useCase.execute({
+        period: {
+          from: new Date("2026-06-15T15:00:00.000Z"),
+          to: new Date("2026-07-15T15:00:00.000Z"),
+        },
+        interaction,
+        credentialInput: userIDInput({ userID: "user", password: "password" }),
+      }),
+    TypeError,
+    "another connection",
+  );
+});
+
+Deno.test("FetchCashFlows authenticates once and obtains incoming and outgoing flows", async () => {
+  const authentication = new FakeAuthentication<"jcb", UserIDPasswordCredentials>("jcb");
+  let fetchCount = 0;
+  const useCase = new FetchCashFlows({
+    authentication,
+    sessionVault: new FakeSessionVault(),
+    credentialVault: new FakeCredentialVault(),
+    cashFlows: {
+      fetchCashFlows: () => {
+        fetchCount += 1;
+        return Promise.resolve({ cashIns: [jcbCashIn()], cashOuts: [jcbCashOut()] });
+      },
+    },
+  });
+
+  const result = await useCase.execute({
+    period: {
+      from: new Date("2026-06-15T15:00:00.000Z"),
+      to: new Date("2026-07-15T15:00:00.000Z"),
+    },
+    interaction,
+    credentialInput: userIDInput({ userID: "user", password: "password" }),
+  });
+
+  assertEquals(authentication.loginCount, 1);
+  assertEquals(fetchCount, 1);
+  assertEquals(result.cashIns, [jcbCashIn()]);
+  assertEquals(result.cashOuts, [jcbCashOut()]);
+});
+
+Deno.test("FetchCashFlows rejects incoming data from another connection", async () => {
+  const authentication = new FakeAuthentication<"jcb", UserIDPasswordCredentials>(
+    "jcb",
+    "business",
+  );
+  const useCase = new FetchCashFlows({
+    authentication,
+    sessionVault: new FakeSessionVault(),
+    credentialVault: new FakeCredentialVault(),
+    cashFlows: {
+      fetchCashFlows: () => Promise.resolve({ cashIns: [jcbCashIn()], cashOuts: [] }),
+    },
   });
 
   await assertRejects(

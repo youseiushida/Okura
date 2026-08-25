@@ -34,6 +34,13 @@ export interface CashOutSource {
   fetchCashOuts(period: Period, options?: FetchOptions): Promise<CashOut[]>;
 }
 
+export interface CashFlowSource {
+  fetchCashFlows(
+    period: Period,
+    options?: FetchOptions,
+  ): Promise<{ readonly cashIns: CashIn[]; readonly cashOuts: CashOut[] }>;
+}
+
 export interface TransferSource {
   fetchTransfers(period: Period, options?: FetchOptions): Promise<Transfer[]>;
 }

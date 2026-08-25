@@ -1,9 +1,9 @@
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert/";
-import { FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
+import { FetchCashFlows, FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
 import type { ExternalServiceSecretConfigurationUseCase } from "../application/external_service_secret.ts";
 import { storedPasswordCredential } from "../application/credentials.ts";
 import { createProviderConnection } from "../model/connection.ts";
-import type { CashOut } from "../model/transaction.ts";
+import type { CashIn, CashOut } from "../model/transaction.ts";
 import {
   FakeAuthentication,
   FakeCredentialVault,
@@ -11,6 +11,7 @@ import {
 } from "../testing/authentication.ts";
 import {
   amazonCashOut,
+  jcbCashIn,
   jcbCashOut,
   moneyForwardAssetBalance,
   moneyForwardCashIn,
@@ -57,13 +58,14 @@ Deno.test("runCLI obtains JCB credentials through AuthenticationPort", async () 
       askText: () => Promise.resolve("har-user"),
       askSecret: () => Promise.resolve("har-password"),
       write: (message) => writes.push(message),
-      createJCBFetch: () => jcbFetch(auth, vault, [jcbCashOut()], credentialVault),
+      createJCBFetch: () => jcbFetch(auth, vault, [jcbCashIn()], [jcbCashOut()], credentialVault),
     }),
   );
   assertEquals(result, 0);
   assertEquals(loginCredentials, { userID: "har-user", password: "har-password" });
   assertEquals(vault.saved?.provider, "jcb");
   assertEquals(credentialVault.saveCount, 0);
+  assertStringIncludes(writes.join("\n"), "2026-06-19\t500円\tRETURNED STORE");
   assertStringIncludes(writes.join("\n"), "2026-06-18\t908円\tＣＬＯＵＤＦＬＡＲＥ");
 });
 
@@ -80,14 +82,14 @@ Deno.test("runCLI does not fetch when JCB credentials are missing", async () => 
           askText: () => Promise.resolve(""),
           askSecret: () => Promise.resolve(""),
           createJCBFetch: () =>
-            new FetchCashOuts({
+            new FetchCashFlows({
               authentication: auth,
               sessionVault: vault,
               credentialVault: new FakeCredentialVault(),
-              cashOuts: {
-                fetchCashOuts: () => {
+              cashFlows: {
+                fetchCashFlows: () => {
                   fetched = true;
-                  return Promise.resolve([]);
+                  return Promise.resolve({ cashIns: [], cashOuts: [] });
                 },
               },
             }),
@@ -509,14 +511,15 @@ class FakeExternalServiceSecretConfiguration implements ExternalServiceSecretCon
 function jcbFetch(
   auth: FakeAuthentication<"jcb", JCBFakeCredentials>,
   vault: FakeSessionVault,
+  cashIns: CashIn[],
   cashOuts: CashOut[],
   credentialVault = new FakeCredentialVault(),
-): FetchCashOuts<"jcb", JCBFakeCredentials> {
-  return new FetchCashOuts({
+): FetchCashFlows<"jcb", JCBFakeCredentials> {
+  return new FetchCashFlows({
     authentication: auth,
     sessionVault: vault,
     credentialVault,
-    cashOuts: { fetchCashOuts: () => Promise.resolve(cashOuts) },
+    cashFlows: { fetchCashFlows: () => Promise.resolve({ cashIns, cashOuts }) },
   });
 }
 

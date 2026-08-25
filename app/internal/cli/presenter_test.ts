@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert/";
 import { createProviderConnection } from "../model/connection.ts";
-import { amazonCashOut, jcbCashOut } from "../testing/financial.ts";
-import { presentCashOuts } from "./presenter.ts";
+import { amazonCashOut, jcbCashIn, jcbCashOut } from "../testing/financial.ts";
+import { presentCashFlow, presentCashOuts } from "./presenter.ts";
 
-Deno.test("presentCashOuts emits machine-readable JSON", () => {
-  const output = presentCashOuts({
+Deno.test("presentCashFlow emits incoming and outgoing JCB data as JSON", () => {
+  const output = presentCashFlow({
     connection: createProviderConnection("jcb", "default"),
     authentication: {
       session: "reused",
@@ -14,6 +14,7 @@ Deno.test("presentCashOuts emits machine-readable JSON", () => {
         persistence: { status: "not-requested" },
       },
     },
+    cashIns: [jcbCashIn()],
     cashOuts: [jcbCashOut()],
   }, {
     periodLabels: { from: "2026-06-16", to: "2026-07-15" },
@@ -21,9 +22,12 @@ Deno.test("presentCashOuts emits machine-readable JSON", () => {
   });
 
   const parsed = JSON.parse(output);
-  assertEquals(parsed.count, 1);
-  assertEquals(parsed.totalAmount, 908);
-  assertEquals(parsed.cashOuts[0].date, "2026-06-18");
+  assertEquals(parsed.cashFlow.cashInCount, 1);
+  assertEquals(parsed.cashFlow.cashOutCount, 1);
+  assertEquals(parsed.cashFlow.totalCashInAmount, 500);
+  assertEquals(parsed.cashFlow.totalCashOutAmount, 908);
+  assertEquals(parsed.cashFlow.cashIns[0].date, "2026-06-19");
+  assertEquals(parsed.cashFlow.cashOuts[0].date, "2026-06-18");
 });
 
 Deno.test("presentCashOuts shows Amazon item titles in the table", () => {

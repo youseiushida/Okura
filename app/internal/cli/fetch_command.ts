@@ -1,4 +1,4 @@
-import type { CashOutFetchUseCase } from "../application/fetch.ts";
+import type { CashFlowFetchUseCase, CashOutFetchUseCase } from "../application/fetch.ts";
 import type { CredentialInput } from "../application/credentials.ts";
 import {
   type FetchArguments,
@@ -15,7 +15,7 @@ import {
   yuchoDebitCredentialInput,
 } from "./credentials.ts";
 import { createAuthInteraction, reportAuthentication } from "./interaction.ts";
-import { presentCashOuts, presentFinancialSnapshot } from "./presenter.ts";
+import { presentCashFlow, presentCashOuts, presentFinancialSnapshot } from "./presenter.ts";
 import type { CLIEnvironment } from "./runtime.ts";
 
 type FetchCommand = (args: string[], environment: CLIEnvironment) => Promise<number>;
@@ -37,12 +37,34 @@ export function runFetchCommand(
 
 async function runJCBFetch(args: string[], environment: CLIEnvironment): Promise<number> {
   const options = parseJCBFetchArguments(args);
-  return await runCashOutFetch(
+  return await runCashFlowFetch(
     environment.createJCBFetch(options.connection, options.walletID),
     options,
     jcbCredentialInput(environment),
     environment,
   );
+}
+
+async function runCashFlowFetch<Credentials, Provider extends SupportedProviderID>(
+  useCase: CashFlowFetchUseCase<Credentials, Provider>,
+  options: Pick<
+    FetchArguments,
+    "period" | "periodLabels" | "format" | "reauthenticate" | "saveCredentials"
+  >,
+  credentialInput: CredentialInput<Provider, Credentials>,
+  environment: CLIEnvironment,
+): Promise<number> {
+  const result = await useCase.execute({
+    period: options.period,
+    forceReauthentication: options.reauthenticate,
+    saveCredentials: options.saveCredentials,
+    interaction: createAuthInteraction(environment),
+    credentialInput,
+  });
+
+  reportAuthentication(result.authentication, result.connection, environment);
+  environment.write(presentCashFlow(result, options));
+  return 0;
 }
 
 async function runAmazonFetch(args: string[], environment: CLIEnvironment): Promise<number> {

@@ -1,4 +1,4 @@
-import { FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
+import { FetchCashFlows, FetchCashOuts, FetchFinancialSnapshot } from "../application/fetch.ts";
 import { ConfigureExternalServiceSecret } from "../application/external_service_secret.ts";
 import { createAmazonModule } from "../adapter/amazon/module.ts";
 import { createJCBModule } from "../adapter/jcb/module.ts";
@@ -27,11 +27,11 @@ export const defaultEnvironment: CLIEnvironment = {
     ),
   createJCBFetch: (connection, walletID) => {
     const module = createJCBModule({ connection, walletID });
-    return new FetchCashOuts({
+    return new FetchCashFlows({
       authentication: module.auth,
       sessionVault: createDefaultSessionVault(createDefaultSecretStore()),
       credentialVault: new KeyringCredentialVault(createDefaultSecretStore()),
-      cashOuts: module.sources.cashOuts,
+      cashFlows: module.sources.cashFlows,
     });
   },
   createAmazonFetch: (connection, walletID) => {
